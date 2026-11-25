@@ -61,7 +61,10 @@ cd voronoi-converter
 On Windows: `start.bat`.
 
 The first run creates `.venv` and installs the Python packages (a few minutes); with Node.js
-installed it also rebuilds the UI. Then the app opens at http://127.0.0.1:8000. Stop it with Ctrl+C.
+installed it also rebuilds the UI. The window shows each step with a progress bar and the time
+taken; do not close it. The full output of the install goes to `install.log`, and the last lines
+are shown if a step fails. Then the app opens at http://127.0.0.1:8000. **Keep the window open
+while you use the app**: closing it stops the app. Stop it with Ctrl+C.
 
 Options: `--port 8080`, `--no-browser`, `--test` (run the test suite instead of starting).
 
