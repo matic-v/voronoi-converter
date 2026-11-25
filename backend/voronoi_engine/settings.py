@@ -224,14 +224,14 @@ class Settings(BaseModel):
         45.0, ge=30.0, le=60.0,
         json_schema_extra=_ui("printing", "Max overhang angle (from vertical)", "°", 1,
                               [{"interior_style": ["struts"], "self_supporting": ["true"]},
-                               {"surface_style": [_A, _B], "pointed_holes": ["true"]}]))
+                               {"surface_style": [_A], "pointed_holes": ["true"]}]))
     max_bridge: float = Field(
         8.0, ge=0.0, le=20.0,
         json_schema_extra=_ui("printing", "Max bridge length", "mm", 0.5,
                               [{"interior_style": ["struts"], "self_supporting": ["true"]}]))
     pointed_holes: bool = Field(
         True, json_schema_extra=_ui("printing", "Pointed hole tops",
-                                    show_if=[{"surface_style": [_A, _B]}]))
+                                    show_if=[{"surface_style": [_A]}]))
 
     # --- Print -------------------------------------------------------------
     nozzle_diameter: float = Field(

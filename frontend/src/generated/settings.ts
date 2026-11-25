@@ -614,8 +614,7 @@ export const SETTING_FIELDS: SettingField[] = [
       },
       {
         "surface_style": [
-          "perforated",
-          "rib_lattice"
+          "perforated"
         ],
         "pointed_holes": [
           "true"
@@ -656,8 +655,7 @@ export const SETTING_FIELDS: SettingField[] = [
     "show_if": [
       {
         "surface_style": [
-          "perforated",
-          "rib_lattice"
+          "perforated"
         ]
       }
     ],

@@ -194,7 +194,7 @@ def wall_overhang_area(result) -> float:
     return float(area[on_wall & (nz < -np.cos(np.radians(45)) - 0.02)].sum())
 
 
-@pytest.mark.parametrize("surface", ["perforated", "rib_lattice"])
+@pytest.mark.parametrize("surface", ["perforated"])
 def test_pointed_tops_remove_most_hole_ceilings(cube, surface: str) -> None:
     flat = generate(cube, Settings(surface_style=surface, interior_style="hollow", pointed_holes=False), "final")
     pointed = generate(cube, Settings(surface_style=surface, interior_style="hollow"), "final")
@@ -259,3 +259,11 @@ def test_suggest_bed_api() -> None:
     np.testing.assert_allclose(body["normal"], [0, 0, 1], atol=1e-6)
     assert body["as_loaded_overhang_mm2"] > 1000 and body["overhang_mm2"] == 0
     assert client.get("/api/models/missing/suggest-bed").status_code == 404
+
+
+def test_rib_lattice_ignores_pointed_tops(cube) -> None:
+    """Style B: the openings fill nearly the whole cell; pointed tops must not fill them."""
+    on = generate(cube, Settings(surface_style="rib_lattice", interior_style="hollow"), "preview")
+    off = generate(cube, Settings(surface_style="rib_lattice", interior_style="hollow",
+                                  pointed_holes=False), "preview")
+    assert np.array_equal(on.vertices, off.vertices) and np.array_equal(on.faces, off.faces)

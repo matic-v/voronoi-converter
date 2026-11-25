@@ -122,7 +122,7 @@ Options: `--port 8080`, `--no-browser`, `--test` (run the test suite instead of 
     mid-air is thus avoided (inside a closed part, support there could never be removed). With a
     skin the result is fully self-supporting; without one (style None) nodes that cannot be held
     are reported.
-  - **Pointed hole tops** (on by default, styles A and B): holes and openings on steep walls get
+  - **Pointed hole tops** (on by default, style A): holes on steep walls get
     a pointed top at the overhang angle (a teardrop shape), so the edge above them prints without
     support.
 - **Overhangs** colours faces that overhang more than 45° (build direction Z up).

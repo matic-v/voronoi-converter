@@ -354,7 +354,9 @@ def _skin_field(surface: str, settings: Settings, body: BodyField, depth, thickn
     local_cell = cell * grading.cell_scale(points, depth=np.clip(-d[band], 0.0, None))
     at = lambda value: value[band] if np.ndim(value) == 3 else value  # noqa: E731
     shell_band = shell[band]
-    pointed = settings.pointed_holes and surface in ("perforated", "rib_lattice")
+    # Holes only (A): the openings of a rib lattice fill nearly the whole cell, so a pointed
+    # top there would fill each cell with a solid gable and hide the ribs.
+    pointed = settings.pointed_holes and surface == "perforated"
     if pointed:
         prepare_pointed_tops(pattern, body.surface.closest(pattern.seeds, k=6)[2])
     if surface == "perforated":
@@ -371,9 +373,6 @@ def _skin_field(surface: str, settings: Settings, body: BodyField, depth, thickn
         if surface == "rib_lattice":
             # Ribs: within half a rib width of a cell wall; the blend radius fillets rib joints.
             wall = pattern.wall_distance(points, settings.blend_radius) - half_width
-            if pointed:
-                wall = pointed_tops(pattern, points, wall, opening_inradius(pattern, settings),
-                                    settings.overhang_angle)
         else:
             # Embossed: closed shell; cell interiors are recessed from the outside, and
             # the corner between recess floor and rib side is filleted.
