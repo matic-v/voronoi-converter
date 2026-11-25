@@ -1,7 +1,7 @@
 import "./style.css";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import {
-  CancelledError, exportResult, fetchEdges, generate, getJson, uploadModel, UserError,
+  CancelledError, exportResult, fetchEdges, generate, getJson, suggestBed, uploadModel, UserError,
   type LoadedModel, type ResultInfo, type TestModel,
 } from "./api";
 import { SettingsPanel } from "./settingsPanel";
@@ -226,8 +226,63 @@ canvas.addEventListener("pointerdown", (e) => {
 canvas.addEventListener("pointerup", (e) => {
   // A click, not the end of an orbit drag.
   if (!pointerDown || Math.hypot(e.clientX - pointerDown.x, e.clientY - pointerDown.y) > 4) return;
+  if (pickingBed) {
+    const picked = viewport.pickFace(e.clientX, e.clientY);
+    if (picked) {
+      stopPickingBed();
+      settings.setBedNormal(picked.normal, "Picked in the view.");
+      const above = viewport.heightAboveBed(picked.point);
+      if (above > 0.2) {
+        settings.setBedNote(
+          `This face points down but is ${above.toFixed(1)} mm above the bed: other parts of the ` +
+            "model are lower, so the part rests on those instead. Pick an outer face, or use Suggest.",
+        );
+      }
+    }
+    return;
+  }
   const edge = viewport.pickEdge(e.clientX, e.clientY);
   if (edge !== null) settings.toggleKeptEdge(edge);
+});
+
+// --- bed face: picked in the view, or suggested by the engine -------------------------
+let pickingBed = false;
+const hint = $("viewport-hint");
+let hintBefore = "";
+function stopPickingBed(): void {
+  if (!pickingBed) return;
+  pickingBed = false;
+  hint.textContent = hintBefore;
+  hint.classList.remove("picking");
+}
+settings.onBedFace({
+  pick: () => {
+    if (!current) return;
+    pickingBed = true;
+    hintBefore = hint.textContent ?? "";
+    hint.textContent = "Click the face of the part that should lie on the bed (Esc to cancel)";
+    hint.classList.add("picking");
+    viewMode.value = "original";
+    viewport.setViewMode("original");
+  },
+  suggest: async () => {
+    if (!current) return;
+    try {
+      const s = await suggestBed(current.id, settings.value.overhang_angle);
+      const note =
+        `Suggested: ${s.overhang_mm2.toFixed(0)} mm² of the outer surface overhangs ` +
+        `(as loaded: ${s.as_loaded_overhang_mm2.toFixed(0)} mm²), ${s.contact_mm2.toFixed(0)} mm² on the bed.`;
+      settings.setBedNormal(s.normal, note);
+    } catch (error) {
+      report(error);
+    }
+  },
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") stopPickingBed();
+});
+settings.onChange((value, changed) => {
+  if (changed === "bed_normal" || changed === null) viewport.setOrientation(value.bed_normal);
 });
 
 async function showModelEdges(model: LoadedModel): Promise<void> {
@@ -317,6 +372,10 @@ async function loadFile(file: File): Promise<void> {
     current = model;
     // Edge numbers belong to one model: a new model starts with none kept.
     if (settings.value.keep_edges.length) settings.setKeptEdges([]);
+    // The bed face belongs to one model too: a new model starts as loaded.
+    stopPickingBed();
+    const [bx, by, bz] = settings.value.bed_normal;
+    if (Math.abs(bx) > 1e-9 || Math.abs(by) > 1e-9 || bz > 0) settings.setBedNormal([0, 0, -1]);
     await showModelEdges(model);
     dropResult();
     generateButton.disabled = false;

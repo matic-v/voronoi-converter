@@ -23,6 +23,8 @@ manifold and one connected body.
 - **Modifiers:** grading of cell size and/or thickness (from the skin, or along X / Y / Z), blend
   radius, solid base, random seed (same settings and seed give a byte-identical file).
 - **Keep edges:** pick edges of the model (sharp edges and fillets) to be drawn by struts.
+- **Printing without supports:** choose the face that lies on the bed (or let the app suggest
+  one); struts are made self-supporting and holes on steep walls get pointed tops.
 - **Output:** smoothing onto the exact shape, edge rounding, printability warnings, overhang view,
   automatic repair of its own defects, 3MF or binary STL export with a settings file next to it.
 
@@ -106,6 +108,23 @@ Options: `--port 8080`, `--no-browser`, `--test` (run the test suite instead of 
   into four and moves the points onto the exact shape, so struts become round and edges cleaner
   without a finer voxel grid. It multiplies the triangle count (and the STL size) by 4 or 16 and
   makes the final slower; the result is limited to 12 million triangles.
+- **Printing (orientation and supports):**
+  - **Bed face:** *Pick face* and click a face of the part in the view: the part is turned so that
+    face lies on the bed, and everything (preview, final, Overhangs view, export) is in that print
+    orientation. *Suggest* picks the flat face that leaves the least of the outer surface
+    overhanging (largest contact area on a tie); *Reset* goes back to the orientation as loaded.
+    A picked face that is not the lowest part in its new position gets a note saying so.
+  - **Self-supporting struts** (on by default): cells are stretched along the print direction
+    (*Cell stretch*, default 2×) so most struts are steep; struts flatter than the *Max overhang
+    angle* (default 45° from vertical) and longer than the *Max bridge length* (default 8 mm) are
+    removed; and, from the bed up, every node that has nothing under it gets a strut down to a
+    supported node, to skin material or to the bed. A node the printer would have to start in
+    mid-air is thus avoided (inside a closed part, support there could never be removed). With a
+    skin the result is fully self-supporting; without one (style None) nodes that cannot be held
+    are reported.
+  - **Pointed hole tops** (on by default, styles A and B): holes and openings on steep walls get
+    a pointed top at the overhang angle (a teardrop shape), so the edge above them prints without
+    support.
 - **Overhangs** colours faces that overhang more than 45° (build direction Z up).
 - **Show:** Result, Original, or Overlay (original as a transparent ghost over the result).
 
@@ -151,13 +170,15 @@ backend/
     body_field.py     distance field of the body on the grid
     lattice.py        Poisson-disk seeds and 3D Voronoi edges
     strut_field.py    distance field of round beams with blended joints
-    surface_pattern.py  surface seeds and the Voronoi (Worley) pattern of the skin
+    surface_pattern.py  surface seeds, the Voronoi (Worley) pattern of the skin, pointed hole tops
     skin_attach.py    aims struts at the walls of an open skin
     grading.py        cell-size and thickness grading
     printability.py   printability warnings
     exact_field.py    the generated shape evaluated at any point
     smoothing.py      smoothness: subdivide and move onto the exact shape
     edges.py          sharp and curved (filleted) edges of the model, for picking
+    orientation.py    print orientation (bed face) and the bed-face suggestion
+    supports.py       self-supporting struts
     edge_members.py   ribs / struts along the kept edges
     repair.py         validation and automatic repair of the result
     export.py         3MF and binary STL writers, settings document

@@ -32,6 +32,12 @@ export interface Settings {
   random_seed: number;
   keep_edges: number[];
   keep_width: number;
+  bed_normal: number[];
+  self_supporting: boolean;
+  cell_stretch: number;
+  overhang_angle: number;
+  max_bridge: number;
+  pointed_holes: boolean;
   nozzle_diameter: number;
   quality: Quality;
   smoothness: Smoothness;
@@ -42,13 +48,15 @@ export type SettingKey = keyof Settings;
 
 export interface SettingField {
   key: SettingKey;
-  kind: "enum" | "float" | "int" | "list";
-  group: "surface" | "interior" | "modifiers" | "keep" | "print";
+  kind: "enum" | "float" | "int" | "bool" | "list";
+  group: "surface" | "interior" | "modifiers" | "keep" | "printing" | "print";
   label: string;
   unit: string;
-  default: string | number | number[];
+  default: string | number | boolean | number[];
   /** Set by clicking in the viewport, not by a slider. */
   picked_in_viewport?: boolean;
+  /** Custom control for settings picked in the viewport. */
+  widget?: "kept_edges" | "bed_face";
   min?: number;
   max?: number;
   step?: number;
@@ -79,6 +87,16 @@ export const DEFAULT_SETTINGS: Settings = {
   "random_seed": 1,
   "keep_edges": [],
   "keep_width": 2.0,
+  "bed_normal": [
+    0.0,
+    0.0,
+    -1.0
+  ],
+  "self_supporting": true,
+  "cell_stretch": 2.0,
+  "overhang_angle": 45.0,
+  "max_bridge": 8.0,
+  "pointed_holes": true,
   "nozzle_diameter": 0.4,
   "quality": "normal",
   "smoothness": "off",
@@ -514,6 +532,7 @@ export const SETTING_FIELDS: SettingField[] = [
     "label": "Edges drawn by struts",
     "unit": "",
     "picked_in_viewport": true,
+    "widget": "kept_edges",
     "default": [],
     "kind": "list"
   },
@@ -527,6 +546,123 @@ export const SETTING_FIELDS: SettingField[] = [
     "kind": "float",
     "min": 0.8,
     "max": 10
+  },
+  {
+    "key": "bed_normal",
+    "group": "printing",
+    "label": "Bed face",
+    "unit": "",
+    "picked_in_viewport": true,
+    "widget": "bed_face",
+    "default": [
+      0.0,
+      0.0,
+      -1.0
+    ],
+    "kind": "list"
+  },
+  {
+    "key": "self_supporting",
+    "group": "printing",
+    "label": "Self-supporting struts",
+    "unit": "",
+    "show_if": [
+      {
+        "interior_style": [
+          "struts"
+        ]
+      }
+    ],
+    "default": true,
+    "kind": "bool"
+  },
+  {
+    "key": "cell_stretch",
+    "group": "printing",
+    "label": "Cell stretch (print direction)",
+    "unit": "×",
+    "step": 0.1,
+    "show_if": [
+      {
+        "interior_style": [
+          "struts"
+        ],
+        "self_supporting": [
+          "true"
+        ]
+      }
+    ],
+    "default": 2.0,
+    "kind": "float",
+    "min": 1.0,
+    "max": 3.0
+  },
+  {
+    "key": "overhang_angle",
+    "group": "printing",
+    "label": "Max overhang angle (from vertical)",
+    "unit": "°",
+    "step": 1,
+    "show_if": [
+      {
+        "interior_style": [
+          "struts"
+        ],
+        "self_supporting": [
+          "true"
+        ]
+      },
+      {
+        "surface_style": [
+          "perforated",
+          "rib_lattice"
+        ],
+        "pointed_holes": [
+          "true"
+        ]
+      }
+    ],
+    "default": 45.0,
+    "kind": "float",
+    "min": 30.0,
+    "max": 60.0
+  },
+  {
+    "key": "max_bridge",
+    "group": "printing",
+    "label": "Max bridge length",
+    "unit": "mm",
+    "step": 0.5,
+    "show_if": [
+      {
+        "interior_style": [
+          "struts"
+        ],
+        "self_supporting": [
+          "true"
+        ]
+      }
+    ],
+    "default": 8.0,
+    "kind": "float",
+    "min": 0.0,
+    "max": 20.0
+  },
+  {
+    "key": "pointed_holes",
+    "group": "printing",
+    "label": "Pointed hole tops",
+    "unit": "",
+    "show_if": [
+      {
+        "surface_style": [
+          "perforated",
+          "rib_lattice"
+        ]
+      }
+    ],
+    "default": true,
+    "kind": "bool"
   },
   {
     "key": "nozzle_diameter",

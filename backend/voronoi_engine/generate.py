@@ -10,12 +10,14 @@ from dataclasses import dataclass, field
 from typing import Any, MutableMapping
 
 import numpy as np
+from scipy import ndimage
 
 from .body_field import BodyField
 from .grading import Grading, scale_range
 from .grid import PREVIEW_MIN_VOXELS_ACROSS, Grid, Mode, Resolution, choose_resolution
 from .lattice import interior_edges
 from .mesh_io import LoadedMesh
+from .orientation import oriented
 from .meshing import extract_mesh, fit_to_envelope, keep_largest_body, signed_volume
 from .printability import printability_warnings
 from .progress import Job
@@ -25,8 +27,10 @@ from .exact_field import ExactField
 from .settings import SMOOTHING_LEVELS, Settings
 from .smoothing import MAX_TRIANGLES, allowed_levels, max_triangles, smooth
 from .skin_attach import attach_edges_to_skin
+from .supports import make_self_supporting
 from .strut_field import make_evaluator, smooth_max, smooth_min, strut_field, strut_margin
-from .surface_pattern import SurfacePattern, surface_seeds
+from .surface_pattern import (SurfacePattern, pointed_tops, prepare_pointed_tops,
+                              surface_seeds)
 
 # Independent random streams, so the surface pattern does not change when the
 # interior style does (and the other way round).
@@ -78,11 +82,12 @@ class GenerationResult:
 def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
              cache: MutableMapping[float, BodyField] | None = None,
              job: Job | None = None) -> GenerationResult:
-    """Build the output mesh. `cache` (voxel size -> BodyField) lets repeated calls
+    """Build the output mesh. `cache` (field_cache_key -> BodyField) lets repeated calls
     for the same input mesh skip the body distance field."""
     job = job or Job()
     started = time.perf_counter()
     warnings: list[str] = []
+    mesh = oriented(mesh, settings.bed_normal)  # print orientation: +Z is up from here on
 
     surface, interior = settings.surface_style, settings.interior_style
     warnings += printability_warnings(settings)
@@ -93,11 +98,12 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
     lo, hi = np.asarray(mesh.info.bounds_min), np.asarray(mesh.info.bounds_max)
     grid = Grid.for_bounds(lo, hi, h)
     job.report(0.02, "Measuring the body")
-    body = cache.get(h) if cache is not None else None
+    cache_key = field_cache_key(h, settings)
+    body = cache.get(cache_key) if cache is not None else None
     if body is None:
         body = BodyField(mesh.vertices, mesh.faces, grid, job.sub(0.02, 0.35))
         if cache is not None:
-            cache[h] = body
+            cache[cache_key] = body
     d = body.sdf
 
     job.report(0.35, "Building the skin")
@@ -134,7 +140,8 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
         rng = np.random.default_rng([settings.random_seed, INTERIOR_STREAM])
         edges = interior_edges(body, lo, hi, settings.interior_cell_size,
                                reach=radius * thickest + h, rng=rng,
-                               scale=cell_scale, scale_range=cell_range)
+                               scale=cell_scale, scale_range=cell_range,
+                               stretch=settings.cell_stretch if settings.self_supporting else 1.0)
         if len(edges) == 0:
             if skin is None:
                 raise GenerationError(
@@ -150,6 +157,22 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
             if attached == 0:
                 warnings.append("No strut reaches the skin: the interior lattice is not "
                                 "connected to it. Use a smaller interior cell size.")
+        if settings.self_supporting and len(edges):
+            # Every node held from below, no long flat bridges (print without supports).
+            job.report(0.44, "Making the struts self-supporting")
+            edges, support = make_self_supporting(
+                edges, body, overhang_deg=settings.overhang_angle, max_bridge=settings.max_bridge,
+                reach=settings.interior_cell_size * cell_range[1] * settings.cell_stretch,
+                strut_radius=radius * thickest,
+                skin_depth=None if surface == "none" else float(nominal * thickest), bed_z=lo[2],
+                skin_value=None if skin is None else (
+                    lambda points, skin=skin: ndimage.map_coordinates(
+                        skin, grid.to_index(points).T, order=1, mode="nearest")))
+            if support.unsupported:
+                warnings.append(
+                    f"{support.unsupported} strut node(s) could not be held from below (nothing "
+                    "under them inside the part) and will need support when printing. A skin, a "
+                    "solid base or another bed face avoids this.")
         # Radius at both ends of every strut (it tapers linearly when thickness is graded).
         end_radius = radius * grading.thickness_scale(edges.reshape(-1, 3)).reshape(-1, 2)
         if len(edges):
@@ -266,6 +289,19 @@ def _smoothness_reduced_warning(settings: Settings, triangles: int, wanted: int,
     return text
 
 
+def opening_inradius(pattern: SurfacePattern, settings: Settings) -> np.ndarray:
+    """Radius of the circle that fits in each seed's opening (hole or gap between ribs)."""
+    half_gap = 0.5 * pattern.neighbour
+    if settings.surface_style == "perforated":
+        return half_gap * settings.hole_size / 100.0
+    return np.clip(half_gap - 0.5 * settings.rib_width, 0.0, None)
+
+
+def field_cache_key(h: float, settings: Settings) -> tuple:
+    """Key of the body distance field: it depends on the voxel size and the orientation."""
+    return (h, tuple(settings.bed_normal))
+
+
 def _resolution_warnings(resolution: Resolution, mode: Mode) -> list[str]:
     feature, h = resolution.feature_mm, resolution.voxel_mm
     if mode == "preview":
@@ -318,17 +354,26 @@ def _skin_field(surface: str, settings: Settings, body: BodyField, depth, thickn
     local_cell = cell * grading.cell_scale(points, depth=np.clip(-d[band], 0.0, None))
     at = lambda value: value[band] if np.ndim(value) == 3 else value  # noqa: E731
     shell_band = shell[band]
+    pointed = settings.pointed_holes and surface in ("perforated", "rib_lattice")
+    if pointed:
+        prepare_pointed_tops(pattern, body.surface.closest(pattern.seeds, k=6)[2])
     if surface == "perforated":
         # Holes: each cell scaled about its seed to the hole size, corners rounded.
         fraction = settings.hole_size / 100.0
         wall = pattern.wall_distance(points, HOLE_ROUNDING * fraction * local_cell,
                                      inset=1.0 - fraction)
+        if pointed:  # no flat ceilings on steep walls: print without support
+            wall = pointed_tops(pattern, points, wall, opening_inradius(pattern, settings),
+                                settings.overhang_angle)
     else:
         half_width = 0.5 * settings.rib_width * at(np.broadcast_to(thickness_scale, grid.shape)
                                                    if np.ndim(thickness_scale) else thickness_scale)
         if surface == "rib_lattice":
             # Ribs: within half a rib width of a cell wall; the blend radius fillets rib joints.
             wall = pattern.wall_distance(points, settings.blend_radius) - half_width
+            if pointed:
+                wall = pointed_tops(pattern, points, wall, opening_inradius(pattern, settings),
+                                    settings.overhang_angle)
         else:
             # Embossed: closed shell; cell interiors are recessed from the outside, and
             # the corner between recess floor and rib side is filleted.

@@ -6,7 +6,7 @@ is generated from it by ``python -m voronoi_engine.export_schema``.
 
 Each field carries UI metadata in ``json_schema_extra``:
 
-* ``group``   - settings panel group (surface / interior / modifiers / print)
+* ``group``   - settings panel group (surface / interior / modifiers / keep / printing / print)
 * ``label``   - label shown in the UI
 * ``unit``    - "mm", "%" or ""
 * ``step``    - slider step
@@ -16,6 +16,8 @@ Each field carries UI metadata in ``json_schema_extra``:
 """
 
 from __future__ import annotations
+
+import math
 
 from enum import Enum
 from typing import Any
@@ -200,10 +202,36 @@ class Settings(BaseModel):
     # --- Keep ----------------------------------------------------------------
     keep_edges: list[int] = Field(
         default_factory=list,
-        json_schema_extra=_ui("keep", "Edges drawn by struts") | {"picked_in_viewport": True})
+        json_schema_extra=_ui("keep", "Edges drawn by struts")
+        | {"picked_in_viewport": True, "widget": "kept_edges"})
     keep_width: float = Field(
         2.0, ge=0.8, le=10,
         json_schema_extra=_ui("keep", "Edge strut width", "mm", 0.1))
+
+    # --- Printing: orientation and supports -----------------------------------
+    bed_normal: list[float] = Field(
+        default_factory=lambda: [0.0, 0.0, -1.0],
+        json_schema_extra=_ui("printing", "Bed face")
+        | {"picked_in_viewport": True, "widget": "bed_face"})
+    self_supporting: bool = Field(
+        True, json_schema_extra=_ui("printing", "Self-supporting struts",
+                                    show_if=[{"interior_style": ["struts"]}]))
+    cell_stretch: float = Field(
+        2.0, ge=1.0, le=3.0,
+        json_schema_extra=_ui("printing", "Cell stretch (print direction)", "×", 0.1,
+                              [{"interior_style": ["struts"], "self_supporting": ["true"]}]))
+    overhang_angle: float = Field(
+        45.0, ge=30.0, le=60.0,
+        json_schema_extra=_ui("printing", "Max overhang angle (from vertical)", "°", 1,
+                              [{"interior_style": ["struts"], "self_supporting": ["true"]},
+                               {"surface_style": [_A, _B], "pointed_holes": ["true"]}]))
+    max_bridge: float = Field(
+        8.0, ge=0.0, le=20.0,
+        json_schema_extra=_ui("printing", "Max bridge length", "mm", 0.5,
+                              [{"interior_style": ["struts"], "self_supporting": ["true"]}]))
+    pointed_holes: bool = Field(
+        True, json_schema_extra=_ui("printing", "Pointed hole tops",
+                                    show_if=[{"surface_style": [_A, _B]}]))
 
     # --- Print -------------------------------------------------------------
     nozzle_diameter: float = Field(
@@ -234,6 +262,17 @@ class Settings(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _bed_normal_is_a_direction(self) -> "Settings":
+        n = self.bed_normal
+        if len(n) != 3 or not all(math.isfinite(v) for v in n):
+            raise ValueError("The bed face direction must be three numbers.")
+        length = math.sqrt(sum(v * v for v in n))
+        if length < 1e-9:
+            raise ValueError("The bed face direction cannot be zero.")
+        self.bed_normal = [round(v / length, 9) + 0.0 for v in n]
+        return self
+
+    @model_validator(mode="after")
     def _kept_edges_sorted(self) -> "Settings":
         if any(i < 0 for i in self.keep_edges):
             raise ValueError("Kept edge numbers cannot be negative.")
@@ -255,7 +294,8 @@ def field_metadata() -> list[dict[str, Any]]:
         meta: dict[str, Any] = {"key": name, **extra, "default": _plain(default)}
         if getattr(annotation, "__origin__", None) is list:
             meta["kind"] = "list"
-            meta["default"] = []
+        elif annotation is bool:
+            meta["kind"] = "bool"
         elif isinstance(annotation, type) and issubclass(annotation, Enum):
             meta["kind"] = "enum"
             meta["options"] = [

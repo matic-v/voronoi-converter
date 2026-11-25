@@ -240,3 +240,15 @@ export async function fetchEdges(modelId: string): Promise<ModelEdges> {
     edgeOfSegment: new Uint32Array(buffer, 8 + segments * 24, segments),
   };
 }
+
+export interface BedSuggestion {
+  normal: number[];
+  overhang_mm2: number;
+  contact_mm2: number;
+  as_loaded_overhang_mm2: number;
+}
+
+/** The flat face to put on the bed for the least overhanging outer surface. */
+export async function suggestBed(modelId: string, overhangAngle: number): Promise<BedSuggestion> {
+  return getJson<BedSuggestion>(`/api/models/${modelId}/suggest-bed?overhang_angle=${overhangAngle}`);
+}

@@ -52,6 +52,9 @@ export class Viewport {
   private readonly overhang = { value: 0 };
   private readonly bedZ = { value: 0 };
   private readonly modelGroup = new THREE.Group();
+  /** Turns the original model (and its edges) into the print orientation. */
+  private readonly orientGroup = new THREE.Group();
+  private originalBox = new THREE.Box3();
   private readonly resultGroup = new THREE.Group();
   private viewMode: ViewMode = "original";
   private readonly boxHelper = new THREE.Box3Helper(new THREE.Box3(), 0x4cc2a5);
@@ -95,7 +98,9 @@ export class Viewport {
     this.addOverhangHighlight(this.outsideMaterial);
     this.addOverhangHighlight(this.resultMaterial);
     this.boxHelper.visible = false;
-    this.scene.add(this.modelGroup, this.resultGroup, this.boxHelper);
+    this.orientGroup.matrixAutoUpdate = false;
+    this.orientGroup.add(this.modelGroup);
+    this.scene.add(this.orientGroup, this.resultGroup, this.boxHelper);
     for (let i = 0; i < 3; i++) {
       const label = document.createElement("div");
       label.className = "dimension-label";
@@ -130,15 +135,77 @@ export class Viewport {
       new THREE.Mesh(geometry, this.outsideMaterial),
       new THREE.Mesh(geometry, this.insideMaterial),
     );
-    this.focusBox = geometry.boundingBox!.clone();
-    this.boxHelper.box.copy(this.focusBox);
-    this.boxHelper.visible = true;
+    this.originalBox = geometry.boundingBox!.clone();
     this.hasModel = true;
+    this.setOrientation([0, 0, -1]);
+    this.applyViewMode();
+    this.setView("iso");
+  }
+
+  /**
+   * Show the original in the print orientation: the face with outward normal
+   * `bedNormal` (loaded-model coordinates) on the bed. Same rule as the engine
+   * (orientation.py): smallest rotation about the box centre, lowest point kept.
+   */
+  setOrientation(bedNormal: number[]): void {
+    this.needsRender = true;
+    const n = new THREE.Vector3(...bedNormal).normalize();
+    const down = new THREE.Vector3(0, 0, -1);
+    const matrix = new THREE.Matrix4();
+    const c = n.dot(down);
+    if (c < 1 - 1e-12) {
+      const rotation = new THREE.Matrix4();
+      if (c < -1 + 1e-12) rotation.makeRotationX(Math.PI);
+      else rotation.makeRotationAxis(new THREE.Vector3().crossVectors(n, down).normalize(), Math.acos(c));
+      const centre = this.originalBox.getCenter(new THREE.Vector3());
+      matrix
+        .makeTranslation(centre.x, centre.y, centre.z)
+        .multiply(rotation)
+        .multiply(new THREE.Matrix4().makeTranslation(-centre.x, -centre.y, -centre.z));
+      // Put the lowest point back where it was.
+      const mesh = this.modelGroup.children[0] as THREE.Mesh | undefined;
+      const positions = mesh?.geometry.getAttribute("position");
+      if (positions) {
+        let lowest = Infinity;
+        const p = new THREE.Vector3();
+        for (let i = 0; i < positions.count; i++) {
+          lowest = Math.min(lowest, p.fromBufferAttribute(positions, i).applyMatrix4(matrix).z);
+        }
+        matrix.premultiply(new THREE.Matrix4().makeTranslation(0, 0, this.originalBox.min.z - lowest));
+      }
+    }
+    this.orientGroup.matrix.copy(matrix);
+    this.orientGroup.updateMatrixWorld(true);
+    this.focusBox = new THREE.Box3().setFromObject(this.modelGroup, true);
+    this.boxHelper.box.copy(this.focusBox);
+    this.boxHelper.visible = this.hasModel;
     const center = this.focusBox.getCenter(new THREE.Vector3());
     this.grid.position.set(center.x, center.y, this.focusBox.min.z);
     this.bedZ.value = this.focusBox.min.z;
-    this.applyViewMode();
-    this.setView("iso");
+  }
+
+  /** Height above the bed (mm) of a point given in loaded-model coordinates. */
+  heightAboveBed(point: number[]): number {
+    const p = new THREE.Vector3(...point).applyMatrix4(this.orientGroup.matrix);
+    return p.z - this.bedZ.value;
+  }
+
+  /** Outward normal and point (loaded-model coordinates) of the original's face under the mouse. */
+  pickFace(clientX: number, clientY: number): { normal: number[]; point: number[] } | null {
+    const mesh = this.modelGroup.children[0] as THREE.Mesh | undefined;
+    if (!mesh || !this.modelGroup.visible) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const pointer = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(pointer, this.camera);
+    const hit = this.raycaster.intersectObject(mesh, false)[0];
+    if (!hit?.face) return null;
+    const n = hit.face.normal; // in the mesh's own (loaded-model) coordinates
+    const round = (v: number) => Math.round(v * 1e6) / 1e6 + 0;
+    const local = mesh.worldToLocal(hit.point.clone());
+    return { normal: [round(n.x), round(n.y), round(n.z)], point: [local.x, local.y, local.z] };
   }
 
   /** Show a generated result (indexed triangles), replacing the previous one. */
@@ -197,7 +264,7 @@ export class Viewport {
     this.edgeOfSegment = edgeOfSegment;
     this.edgeLines = new LineSegments2(geometry, this.edgeMaterial);
     this.edgeLines.renderOrder = 2;
-    this.scene.add(this.edgeLines);
+    this.orientGroup.add(this.edgeLines);
     this.setKeptEdges(kept);
   }
 
@@ -235,7 +302,7 @@ export class Viewport {
 
   private clearEdges(): void {
     if (this.edgeLines) {
-      this.scene.remove(this.edgeLines);
+      this.orientGroup.remove(this.edgeLines);
       this.edgeLines.geometry.dispose();
       this.edgeLines = null;
     }

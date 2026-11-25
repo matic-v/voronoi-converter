@@ -28,6 +28,8 @@ def render() -> str:
         annotation = info.annotation
         if getattr(annotation, "__origin__", None) is list:
             interface.append(f"  {name}: number[];")
+        elif annotation is bool:
+            interface.append(f"  {name}: boolean;")
         elif isinstance(annotation, type) and issubclass(annotation, Enum):
             type_name = annotation.__name__
             union = " | ".join(json.dumps(member.value) for member in annotation)
@@ -45,13 +47,15 @@ def render() -> str:
         "",
         "export interface SettingField {",
         "  key: SettingKey;",
-        '  kind: "enum" | "float" | "int" | "list";',
-        '  group: "surface" | "interior" | "modifiers" | "keep" | "print";',
+        '  kind: "enum" | "float" | "int" | "bool" | "list";',
+        '  group: "surface" | "interior" | "modifiers" | "keep" | "printing" | "print";',
         "  label: string;",
         "  unit: string;",
-        "  default: string | number | number[];",
+        "  default: string | number | boolean | number[];",
         "  /** Set by clicking in the viewport, not by a slider. */",
         "  picked_in_viewport?: boolean;",
+        "  /** Custom control for settings picked in the viewport. */",
+        '  widget?: "kept_edges" | "bed_face";',
         "  min?: number;",
         "  max?: number;",
         "  step?: number;",
