@@ -100,6 +100,10 @@ def test_levels_are_capped_by_the_triangle_limit() -> None:
     Settings(smoothness="smooth", grading_mode="z", grading_strength=80, grading_target="both"),
     Settings(smoothness="smooth", grading_mode="from_skin", grading_target="thickness"),
     Settings(smoothness="smooth", surface_style="rib_lattice", keep_edges=[0, 3, 7]),
+    Settings(smoothness="smooth", surface_style="perforated", pointed_holes=False),
+    Settings(smoothness="smooth", surface_style="rib_lattice", pointed_holes=False,
+             self_supporting=False),
+    Settings(smoothness="smooth", surface_style="embossed", bed_normal=[1, 0, 0]),
 ])
 def test_exact_field_matches_the_unsmoothed_mesh(cube, settings: Settings) -> None:
     """The marching-cubes surface must lie on the zero level of the exact field
@@ -249,8 +253,9 @@ def test_edge_rounding_removes_the_saw_teeth_on_the_skin(sphere, surface: str) -
 
 
 def test_smoothing_without_edge_rounding_makes_no_spikes(sphere) -> None:
+    # Pointed hole tops add a sharp point of their own: off here, to measure the guard alone.
     settings = Settings(surface_style="rib_lattice", interior_style="hollow", edge_rounding=0.0,
-                        smoothness="smooth")
+                        smoothness="smooth", pointed_holes=False)
     result = generate(sphere, settings, "final")
     assert result.valid and spike_count(result) <= 5  # was ~200 before the spike guard
 
