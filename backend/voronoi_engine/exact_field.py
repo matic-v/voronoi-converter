@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .body_field import BodyField
-from .edge_members import member_depth, member_field, member_reach
+from .edge_members import member_depth, member_field, member_in_skin, member_reach
 from .grading import Grading
 from .settings import Settings
 from .strut_field import StrutEvaluator, smooth_max, smooth_min
@@ -80,6 +80,13 @@ class ExactField:
                             wall[band] = pointed_tops(self.pattern, p, wall[band],
                                                       opening_inradius(self.pattern, s),
                                                       s.overhang_angle)
+                        if self.keep is not None and member_in_skin(surface):
+                            from .generate import with_kept_edges
+                            reach = member_reach(s, h, self.keep_rounding)
+                            to_edge = np.minimum(self.keep(p), reach)
+                            wall[band] = with_kept_edges(wall[band], d[band], to_edge, s,
+                                                         depth[band] if np.ndim(depth) else depth,
+                                                         reach)
                     if surface == "embossed":
                         wall[band] = smooth_min(wall[band], d[band] + s.emboss_depth, rounding)
                     skin = shell.copy()
@@ -108,7 +115,7 @@ class ExactField:
         else:
             solid = skin
 
-        if self.keep is not None:
+        if self.keep is not None and not member_in_skin(surface):
             depth_e = member_depth(s)
             reach = member_reach(s, h, self.keep_rounding)
             close = (d > -(depth_e + 2 * h + self.keep_rounding + blend)) & (d < 2 * h)

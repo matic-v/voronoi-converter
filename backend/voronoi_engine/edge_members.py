@@ -39,10 +39,33 @@ def member_field(d: np.ndarray, to_edge: np.ndarray, width: float, depth: float,
     return np.minimum(on_this_face, on_other_face)
 
 
+def member_lateral(d: np.ndarray, to_edge: np.ndarray, width: float, depth,
+                   rounding: float) -> np.ndarray:
+    """The member as part of a patterned skin (A, B, C): only its sideways extent, as a
+    wall of the pattern. The skin's own inner face limits it on the edge's nearest face,
+    so the member and the skin share one inner face instead of two coincident ones
+    (which the voxel grid turns into shards). The band on the other face is still limited
+    by `depth`, measured along this face, as in member_field."""
+    below = np.clip(-d, 0.0, None)
+    along = np.sqrt(np.clip(to_edge**2 - below**2, 0.0, None))
+    half = 0.5 * width
+    on_this_face = along - half
+    on_other_face = smooth_max(below - half, along - depth, rounding)
+    return np.minimum(on_this_face, on_other_face)
+
+
+def member_in_skin(surface_style: str) -> bool:
+    """Styles whose skin draws the kept edges itself (see member_lateral)."""
+    return surface_style in ("perforated", "rib_lattice", "embossed")
+
+
 def member_depth(settings) -> float:
-    """Closed or perforated skins: as deep as the shell. Ribs and bare struts: as deep as wide."""
+    """Patterned and closed skins: as deep as the skin (shell, or ribs for B). Bare struts
+    (style None): as deep as wide."""
     if settings.surface_style in ("perforated", "embossed", "solid"):
         return settings.shell_thickness
+    if settings.surface_style == "rib_lattice":
+        return settings.rib_width
     return settings.keep_width
 
 

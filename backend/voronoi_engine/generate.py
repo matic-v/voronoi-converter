@@ -23,7 +23,7 @@ from .printability import printability_warnings
 from .progress import Job
 from .cleanup import STRENGTHS, clean_up, unfold_fins
 from .repair import repair, validate, weld_as_exported
-from .edge_members import member_depth, member_field, member_reach
+from .edge_members import member_depth, member_field, member_in_skin, member_lateral, member_reach
 from .exact_field import ExactField
 from .settings import SMOOTHING_LEVELS, Settings
 from .smoothing import MAX_TRIANGLES, allowed_levels, max_triangles, smooth
@@ -118,6 +118,22 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
     skin, pattern, evaluator, skin_depth, band = None, None, None, np.float32(0.0), None
     # Edges of a patterned skin (rib edges, hole rims, recess edges) are rounded.
     rounding = settings.edge_rounding if surface in ("perforated", "rib_lattice", "embossed") else 0.0
+    # Kept edges: distance to them on the grid. With a patterned skin the skin draws them
+    # (they are walls of its pattern); otherwise they are added after the interior.
+    keep_edges, to_edges, keep_reach = None, None, 0.0
+    if settings.keep_edges:
+        model_edges = mesh.edges
+        if max(settings.keep_edges) >= model_edges.count:
+            raise GenerationError(
+                f"The kept edges in these settings do not match this model (it has "
+                f"{model_edges.count} edges to pick). Clear the kept edges, or load the model "
+                "the settings were saved for.")
+        segments = model_edges.segments_of(settings.keep_edges)
+        keep_reach = member_reach(settings, h, rounding)
+        zero = np.zeros(len(segments))
+        keep_edges = make_evaluator(segments, zero, 0.0, h, margin=keep_reach)
+        to_edges = strut_field(grid, d, segments, zero, 0.0, evaluator=keep_edges, margin=keep_reach)
+
     if surface != "none":
         nominal = settings.rib_width if surface == "rib_lattice" else settings.shell_thickness
         thickness_scale = grading.thickness_scale_on_grid(grid, d)
@@ -125,7 +141,10 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
         if not (surface == "solid" and interior == "solid"):
             body.ensure_depth(nominal * thickest + blend + 2 * h + rounding)
             skin, pattern, band = _skin_field(surface, settings, body, skin_depth, thickness_scale, grading,
-                               cell_range, job.sub(0.35, 0.42))
+                               cell_range, job.sub(0.35, 0.42),
+                               to_edges if member_in_skin(surface) else None, keep_reach)
+    if member_in_skin(surface):
+        to_edges = None  # drawn by the skin; free the memory
 
     if interior == "solid":
         if skin is None or surface == "solid":
@@ -200,28 +219,16 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
         )
     del skin
 
-    keep_edges = None
-    if settings.keep_edges:
-        # Kept edges become members of the lattice (a rib or strut along the edge).
-        model_edges = mesh.edges
-        if max(settings.keep_edges) >= model_edges.count:
-            raise GenerationError(
-                f"The kept edges in these settings do not match this model (it has "
-                f"{model_edges.count} edges to pick). Clear the kept edges, or load the model "
-                "the settings were saved for.")
+    if to_edges is not None and not member_in_skin(surface):
+        # Kept edges as members of the lattice (a strut along the edge), joined like a strut.
         job.report(0.72, "Adding struts along the kept edges")
-        segments = model_edges.segments_of(settings.keep_edges)
-        reach = member_reach(settings, h, rounding)
         depth_e = member_depth(settings)
-        zero = np.zeros(len(segments))
-        keep_edges = make_evaluator(segments, zero, 0.0, h, margin=reach)
-        to_edges = strut_field(grid, d, segments, zero, 0.0, evaluator=keep_edges, margin=reach)
-        nodes = np.nonzero((to_edges < reach) & (d > -(depth_e + 2 * h + rounding + blend)) & (d < 2 * h))
+        nodes = np.nonzero((to_edges < keep_reach)
+                           & (d > -(depth_e + 2 * h + rounding + blend)) & (d < 2 * h))
         members = member_field(d[nodes].astype(np.float64), to_edges[nodes].astype(np.float64),
                                settings.keep_width, depth_e, rounding)
-        del to_edges
-        # Joined to skin and struts like a strut joint.
         solid[nodes] = smooth_min(solid[nodes], members, blend)
+    del to_edges
 
     if settings.solid_base_thickness > 0:
         # Flat solid layer at the bottom of the part, for bed adhesion.
@@ -376,13 +383,30 @@ def _resolution_warnings(resolution: Resolution, mode: Mode) -> list[str]:
             f"({feature:.2f} mm). Thin features may be rough or break.{advice}"]
 
 
+def with_kept_edges(wall: np.ndarray, d: np.ndarray, to_edge: np.ndarray, settings: Settings,
+                    depth, reach: float) -> np.ndarray:
+    """Pattern walls plus the kept-edge members, joined with the blend radius like rib
+    joints. Shared by the voxel grid and the exact field."""
+    close = to_edge < reach
+    if not close.any():
+        return wall
+    wall = wall.copy()
+    depth_close = depth[close] if np.ndim(depth) else depth
+    lateral = member_lateral(np.asarray(d[close], np.float64), np.asarray(to_edge[close], np.float64),
+                             settings.keep_width, depth_close, settings.edge_rounding)
+    wall[close] = smooth_min(wall[close], lateral.astype(wall.dtype), settings.blend_radius)
+    return wall
+
+
 def _skin_field(surface: str, settings: Settings, body: BodyField, depth, thickness_scale,
-                grading: Grading, cell_range: tuple[float, float], job: Job):
+                grading: Grading, cell_range: tuple[float, float], job: Job,
+                to_edges: np.ndarray | None = None, keep_reach: float = 0.0):
     """Field of the skin (negative in material) for every surface style except None.
 
     Returns (skin field, surface pattern or None, band): the band holds the grid nodes
     where the pattern was evaluated. `depth` and `thickness_scale` are numbers, or
-    arrays over the grid when the thickness is graded.
+    arrays over the grid when the thickness is graded. With `to_edges` (distance to the
+    kept edges on the grid) the kept edges are drawn as walls of the pattern.
     """
     d, grid, h = body.sdf, body.grid, body.grid.h
     shell = np.maximum(d, -(d + depth))  # between the surface and its inward offset
@@ -433,7 +457,11 @@ def _skin_field(surface: str, settings: Settings, body: BodyField, depth, thickn
             # Embossed: closed shell; cell interiors are recessed from the outside, and
             # the corner between recess floor and rib side is filleted.
             wall = pattern.wall_distance(points, RECESS_ROUNDING * local_cell) - half_width
-            wall = smooth_min(wall, d[band] + np.float32(settings.emboss_depth), rounding)
+    if to_edges is not None:
+        wall = with_kept_edges(wall, d[band], to_edges[band], settings, at(
+            np.broadcast_to(depth, grid.shape) if np.ndim(depth) else depth), keep_reach)
+    if surface == "embossed":
+        wall = smooth_min(wall, d[band] + np.float32(settings.emboss_depth), rounding)
     # Shell minus holes / cells: the edges where they meet are rounded.
     shell[band] = smooth_max(shell_band, wall, rounding)
     return shell, pattern, band
