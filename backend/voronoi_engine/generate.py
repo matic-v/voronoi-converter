@@ -22,6 +22,7 @@ from .meshing import extract_mesh, fit_to_envelope, keep_largest_body, signed_vo
 from .printability import printability_warnings
 from .progress import Job
 from .cleanup import STRENGTHS, clean_up, unfold_fins
+from .creases import crease_segments, snap_to_sharp_edges
 from .repair import repair, validate, weld_as_exported
 from .edge_members import member_depth, member_field, member_in_skin, member_lateral, member_reach
 from .exact_field import ExactField
@@ -263,6 +264,11 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
         vertices, faces = smooth(vertices, faces, exact, levels, h, job.sub(0.85, 0.95))
         # Whatever the projection did, nothing may end outside the original envelope.
         vertices, faces = fit_to_envelope(vertices, faces, body, passes=0)
+    if mode == "final":
+        # Points next to the part's creases (sharp edges, fillet facets) go onto them:
+        # no saw-tooth rows there.
+        vertices, _ = snap_to_sharp_edges(vertices, faces, body,
+                                          crease_segments(mesh.vertices, mesh.faces), h)
     if mode == "final" and settings.cleanup != "off":
         vertices, faces = _clean_up(vertices, faces, body, settings.cleanup,
                                     job.sub(0.95, 0.98), warnings)

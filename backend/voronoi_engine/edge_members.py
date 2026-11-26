@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .strut_field import smooth_max
+from .strut_field import smooth_max, smooth_min
 
 
 def member_field(d: np.ndarray, to_edge: np.ndarray, width: float, depth: float,
@@ -51,7 +51,9 @@ def member_lateral(d: np.ndarray, to_edge: np.ndarray, width: float, depth,
     half = 0.5 * width
     on_this_face = along - half
     on_other_face = smooth_max(below - half, along - depth, rounding)
-    return np.minimum(on_this_face, on_other_face)
+    # Where the bands on the two faces meet, the corner is rounded too: a sharp inside
+    # corner along the whole edge is a crease the voxel grid turns into a saw-tooth row.
+    return smooth_min(on_this_face, on_other_face, rounding)
 
 
 def member_in_skin(surface_style: str) -> bool:
