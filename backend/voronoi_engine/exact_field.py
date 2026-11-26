@@ -12,7 +12,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from .body_field import BodyField
-from .edge_members import member_depth, member_field, member_in_skin, member_reach
+from .edge_members import (edge_rounding_range, member_depth, member_field, member_in_skin,
+                           member_reach, rounding_near_edges)
 from .grading import Grading
 from .settings import Settings
 from .strut_field import StrutEvaluator, smooth_max, smooth_min
@@ -58,7 +59,10 @@ class ExactField:
                 skin = shell
                 if surface != "solid":
                     rounding = s.edge_rounding
-                    band = (d > -(depth + 2 * h + rounding)) & (d < 2 * h)
+                    in_skin = self.keep is not None and member_in_skin(surface)
+                    widest = edge_rounding_range(s, h)[1] if in_skin else rounding
+                    band = (d > -(depth + 2 * h + widest)) & (d < 2 * h)
+                    band_rounding = rounding  # a number, or one radius per band point
                     wall = np.zeros(len(points))
                     if band.any():
                         p = points[band]
@@ -80,17 +84,22 @@ class ExactField:
                             wall[band] = pointed_tops(self.pattern, p, wall[band],
                                                       opening_inradius(self.pattern, s),
                                                       s.overhang_angle)
-                        if self.keep is not None and member_in_skin(surface):
+                        if in_skin:
                             from .generate import with_kept_edges
-                            reach = member_reach(s, h, self.keep_rounding)
-                            to_edge = np.minimum(self.keep(p), reach)
+                            reach = member_reach(s, h, edge_rounding_range(s, h)[1])
+                            # Only points near a kept edge need the (slow) distance.
+                            to_edge = np.full(len(p), reach)
+                            close = self.keep.near(p)
+                            if close.any():
+                                to_edge[close] = np.minimum(self.keep(p[close]), reach)
+                            band_rounding = rounding_near_edges(to_edge, s, h)
                             wall[band] = with_kept_edges(wall[band], d[band], to_edge, s,
                                                          depth[band] if np.ndim(depth) else depth,
-                                                         reach)
+                                                         reach, band_rounding)
                     if surface == "embossed":
-                        wall[band] = smooth_min(wall[band], d[band] + s.emboss_depth, rounding)
+                        wall[band] = smooth_min(wall[band], d[band] + s.emboss_depth, band_rounding)
                     skin = shell.copy()
-                    skin[band] = smooth_max(shell[band], wall[band], rounding)
+                    skin[band] = smooth_max(shell[band], wall[band], band_rounding)
 
         if interior == "solid":
             if skin is None or surface == "solid":
@@ -117,7 +126,7 @@ class ExactField:
 
         if self.keep is not None and not member_in_skin(surface):
             depth_e = member_depth(s)
-            reach = member_reach(s, h, self.keep_rounding)
+            reach = member_reach(s, h, edge_rounding_range(s, h)[1])  # as in generate
             close = (d > -(depth_e + 2 * h + self.keep_rounding + blend)) & (d < 2 * h)
             to_edge = np.full(len(points), reach)
             to_edge[close] = np.minimum(self.keep(points[close]), reach)

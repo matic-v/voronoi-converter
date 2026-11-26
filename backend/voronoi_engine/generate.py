@@ -22,9 +22,9 @@ from .meshing import extract_mesh, fit_to_envelope, keep_largest_body, signed_vo
 from .printability import printability_warnings
 from .progress import Job
 from .cleanup import STRENGTHS, clean_up, unfold_fins
-from .creases import crease_segments, snap_to_sharp_edges
 from .repair import repair, validate, weld_as_exported
-from .edge_members import member_depth, member_field, member_in_skin, member_lateral, member_reach
+from .edge_members import (edge_rounding_range, member_depth, member_field, member_in_skin,
+                           member_lateral, member_reach, rounding_near_edges)
 from .exact_field import ExactField
 from .settings import SMOOTHING_LEVELS, Settings
 from .smoothing import MAX_TRIANGLES, allowed_levels, max_triangles, smooth
@@ -119,6 +119,8 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
     skin, pattern, evaluator, skin_depth, band = None, None, None, np.float32(0.0), None
     # Edges of a patterned skin (rib edges, hole rims, recess edges) are rounded.
     rounding = settings.edge_rounding if surface in ("perforated", "rib_lattice", "embossed") else 0.0
+    # Next to kept edges the rounding may be larger (edge_rounding_range): room for it.
+    rounding_wide = edge_rounding_range(settings, h)[1] if rounding > 0 else rounding
     # Kept edges: distance to them on the grid. With a patterned skin the skin draws them
     # (they are walls of its pattern); otherwise they are added after the interior.
     keep_edges, to_edges, keep_reach = None, None, 0.0
@@ -130,7 +132,7 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
                 f"{model_edges.count} edges to pick). Clear the kept edges, or load the model "
                 "the settings were saved for.")
         segments = model_edges.segments_of(settings.keep_edges)
-        keep_reach = member_reach(settings, h, rounding)
+        keep_reach = member_reach(settings, h, edge_rounding_range(settings, h)[1])
         zero = np.zeros(len(segments))
         keep_edges = make_evaluator(segments, zero, 0.0, h, margin=keep_reach)
         to_edges = strut_field(grid, d, segments, zero, 0.0, evaluator=keep_edges, margin=keep_reach)
@@ -140,7 +142,7 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
         thickness_scale = grading.thickness_scale_on_grid(grid, d)
         skin_depth = np.float32(nominal) * thickness_scale
         if not (surface == "solid" and interior == "solid"):
-            body.ensure_depth(nominal * thickest + blend + 2 * h + rounding)
+            body.ensure_depth(nominal * thickest + blend + 2 * h + rounding_wide)
             skin, pattern, band = _skin_field(surface, settings, body, skin_depth, thickness_scale, grading,
                                cell_range, job.sub(0.35, 0.42),
                                to_edges if member_in_skin(surface) else None, keep_reach)
@@ -259,16 +261,11 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
         exact = ExactField(
             settings, body, grading, pattern, evaluator, strut_margin(blend, h),
             lo[2] + settings.solid_base_thickness if settings.solid_base_thickness > 0 else None,
-            exact_depth=(nominal * thickest + 2 * h + rounding) if surface != "none" else 0.0,
+            exact_depth=(nominal * thickest + 2 * h + rounding_wide) if surface != "none" else 0.0,
             keep=keep_edges, keep_rounding=rounding)
         vertices, faces = smooth(vertices, faces, exact, levels, h, job.sub(0.85, 0.95))
         # Whatever the projection did, nothing may end outside the original envelope.
         vertices, faces = fit_to_envelope(vertices, faces, body, passes=0)
-    if mode == "final":
-        # Points next to the part's creases (sharp edges, fillet facets) go onto them:
-        # no saw-tooth rows there.
-        vertices, _ = snap_to_sharp_edges(vertices, faces, body,
-                                          crease_segments(mesh.vertices, mesh.faces), h)
     if mode == "final" and settings.cleanup != "off":
         vertices, faces = _clean_up(vertices, faces, body, settings.cleanup,
                                     job.sub(0.95, 0.98), warnings)
@@ -390,16 +387,18 @@ def _resolution_warnings(resolution: Resolution, mode: Mode) -> list[str]:
 
 
 def with_kept_edges(wall: np.ndarray, d: np.ndarray, to_edge: np.ndarray, settings: Settings,
-                    depth, reach: float) -> np.ndarray:
+                    depth, reach: float, rounding) -> np.ndarray:
     """Pattern walls plus the kept-edge members, joined with the blend radius like rib
-    joints. Shared by the voxel grid and the exact field."""
+    joints. `rounding` is a number or one radius per point (rounding_near_edges). Shared
+    by the voxel grid and the exact field."""
     close = to_edge < reach
     if not close.any():
         return wall
     wall = wall.copy()
     depth_close = depth[close] if np.ndim(depth) else depth
+    rounding_close = rounding[close] if np.ndim(rounding) else rounding
     lateral = member_lateral(np.asarray(d[close], np.float64), np.asarray(to_edge[close], np.float64),
-                             settings.keep_width, depth_close, settings.edge_rounding)
+                             settings.keep_width, depth_close, rounding_close)
     wall[close] = smooth_min(wall[close], lateral.astype(wall.dtype), settings.blend_radius)
     return wall
 
@@ -434,7 +433,8 @@ def _skin_field(surface: str, settings: Settings, body: BodyField, depth, thickn
 
     # The pattern is only needed in the skin band (plus a margin for interpolation and
     # for the edge rounding). Outside it the skin is just the shell.
-    band = np.nonzero((d > -(depth + 2 * h + rounding)) & (d < 2 * h))
+    widest = edge_rounding_range(settings, h)[1] if to_edges is not None else rounding
+    band = np.nonzero((d > -(depth + 2 * h + widest)) & (d < 2 * h))
     points = grid.points(band)
     # Cell corners are rounded in proportion to the local cell size.
     local_cell = cell * grading.cell_scale(points, depth=np.clip(-d[band], 0.0, None))
@@ -464,8 +464,10 @@ def _skin_field(surface: str, settings: Settings, body: BodyField, depth, thickn
             # the corner between recess floor and rib side is filleted.
             wall = pattern.wall_distance(points, RECESS_ROUNDING * local_cell) - half_width
     if to_edges is not None:
+        # Next to kept edges the rounding is at least two voxels (edge_rounding_range).
+        rounding = rounding_near_edges(to_edges[band], settings, h)
         wall = with_kept_edges(wall, d[band], to_edges[band], settings, at(
-            np.broadcast_to(depth, grid.shape) if np.ndim(depth) else depth), keep_reach)
+            np.broadcast_to(depth, grid.shape) if np.ndim(depth) else depth), keep_reach, rounding)
     if surface == "embossed":
         wall = smooth_min(wall, d[band] + np.float32(settings.emboss_depth), rounding)
     # Shell minus holes / cells: the edges where they meet are rounded.

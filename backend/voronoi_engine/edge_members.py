@@ -56,6 +56,32 @@ def member_lateral(d: np.ndarray, to_edge: np.ndarray, width: float, depth,
     return smooth_min(on_this_face, on_other_face, rounding)
 
 
+MIN_ROUNDING_VOXELS = 2.0  # a rounding radius the voxel grid can draw without teeth
+
+
+def edge_rounding_range(settings, h: float) -> tuple[float, float]:
+    """(rounding set, rounding next to kept edges). Along a kept edge the member's edges
+    and the grooves beside it run the whole length of the edge; with a radius under about
+    two voxels the grid draws them as a saw-tooth row of shards, so there the radius is
+    at least two voxels. A rounding of 0 (sharp) is left as set."""
+    rounding = settings.edge_rounding
+    if rounding <= 0 or not settings.keep_edges:
+        return rounding, rounding
+    return rounding, max(rounding, MIN_ROUNDING_VOXELS * h)
+
+
+def rounding_near_edges(to_edge: np.ndarray, settings, h: float):
+    """Rounding radius per point: the larger radius on and next to the kept-edge members,
+    going smoothly back to the radius set over two of those radii further out."""
+    rounding, near = edge_rounding_range(settings, h)
+    if near == rounding:
+        return rounding
+    inner = 0.5 * settings.keep_width + member_depth(settings)
+    t = np.clip((np.asarray(to_edge, np.float64) - inner) / (2.0 * near), 0.0, 1.0)
+    smooth = t * t * (3.0 - 2.0 * t)
+    return near + (rounding - near) * smooth
+
+
 def member_in_skin(surface_style: str) -> bool:
     """Styles whose skin draws the kept edges itself (see member_lateral)."""
     return surface_style in ("perforated", "rib_lattice", "embossed")

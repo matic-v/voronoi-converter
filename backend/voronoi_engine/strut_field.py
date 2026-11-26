@@ -20,10 +20,16 @@ MAX_K = 128
 
 
 def smooth_min(a: np.ndarray, b: np.ndarray, k: float) -> np.ndarray:
-    """Polynomial smooth minimum; the blend reaches about `k` from a sharp joint."""
-    if k <= 0:
-        return np.minimum(a, b)
-    weight = np.clip(k - np.abs(a - b), 0.0, None) / k
+    """Polynomial smooth minimum; the blend reaches about `k` from a sharp joint.
+    `k` is a number, or an array with one radius per point (0 = sharp there)."""
+    if np.ndim(k) == 0:
+        if k <= 0:
+            return np.minimum(a, b)
+        weight = np.clip(k - np.abs(a - b), 0.0, None) / k
+        return np.minimum(a, b) - weight * weight * (k / 4.0)
+    k = np.asarray(k, dtype=np.result_type(a, b))
+    safe = np.maximum(k, 1e-12)
+    weight = np.clip(k - np.abs(a - b), 0.0, None) / safe
     return np.minimum(a, b) - weight * weight * (k / 4.0)
 
 
