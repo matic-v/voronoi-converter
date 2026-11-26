@@ -1,0 +1,197 @@
+# Decisions
+
+Short log of choices not fixed by SPEC.md. Newest at the bottom.
+
+## Step 1 – Scaffold
+
+1. **Stack: the recommended one.** Python engine (numpy, scipy, scikit-image, trimesh) + FastAPI + TypeScript/three.js/Vite. No alternative proposed.
+2. **Two Python packages.** `backend/voronoi_engine` is pure geometry and must not import the web framework; `backend/voronoi_server` is the FastAPI layer.
+3. **Settings schema lives in one place:** the pydantic model `voronoi_engine/settings.py`. The TypeScript types, defaults and UI metadata in `frontend/src/generated/settings.ts` are generated from it (`python -m voronoi_engine.export_schema`); a test fails if the generated file is stale. The settings panel is built from that metadata, including which settings are visible for which styles.
+4. **One server, one port.** The start script builds the UI and FastAPI serves it together with the API at `http://127.0.0.1:8000`. `npm run dev` (with an `/api` proxy) is only for UI development.
+5. **Start logic is in `scripts/start.py`;** `start.sh` and `start.bat` only call it, so all platforms behave the same. Python packages go into a local `.venv`. Requires Python 3.10–3.14 and Node.js ≥ 20. The launcher re-runs itself with a supported Python if started with an unsupported one (e.g. 3.15), installs wheels only (never compiles from source), and rebuilds a `.venv` made with an unsupported Python.
+6. **Test models** rest on the bed (min Z = 0) and are centred in X/Y. The bracket is an L-profile 100 × 40 × 60 mm: 8 mm upright and base, stepping down to a 40 mm long, 2 mm thick flange. No holes (no boolean engine needed, exact volume known for tests). The sphere is a custom UV sphere so its bounding box is exactly 60 mm.
+7. **Enum values in JSON** are words, not letters: surface `perforated` (A), `rib_lattice` (B), `embossed` (C), `none`, `solid`.
+8. **Visibility of grading settings.** "All patterned" is read as: surface style A/B/C or interior Struts. Grading strength/target/direction additionally need grading mode ≠ Off.
+9. **Emboss depth > shell thickness** is rejected by the schema; the UI clamps emboss depth when shell thickness is lowered.
+10. **Settings panel built in step 1** (the plan does not assign it to a step). Controls do not trigger anything until the pipeline exists.
+11. **Viewport:** Z up, grid shows a 250 × 250 mm bed with 10 mm squares.
+12. **Node.js is optional for users.** The download zip and the repository include the built UI (`frontend/dist`); the launcher uses it when npm is not installed and rebuilds it when npm is available.
+
+## Step 2 – Load and validate
+
+13. **The engine validates, the browser displays.** The file is uploaded to the engine (`POST /api/models`), which welds, validates and keeps the mesh in memory (last 3 models). The browser parses the same bytes with three.js for display, and shows it only if the engine accepted it. A refused file leaves the previous model in place.
+14. **Welding is not repair.** Vertices with bit-identical float32 coordinates are merged, which is needed to read any STL as a connected mesh. No tolerance-based merging, hole filling or normal fixing is done.
+15. **Checks, all reported together:** open edges (count), non-manifold edges (count), inconsistent winding (count of edges), inside-out (negative volume), encloses no volume, flat/zero size (any axis < 0.01 mm), unreadable/empty file. Manifoldness is checked per edge; vertices where two bodies touch at a single point are not detected.
+16. **Accepted with a warning, not refused:** longer than 250 mm, more than 500,000 triangles, shorter than 5 mm (probably wrong units). Multi-body files: see decision 20 (superseded for multi-body files by decision 20).
+17. **Display ignores the normals stored in the STL** (often wrong) and uses flat per-face shading. Faces seen from behind through a clipping cut are drawn orange.
+18. **Broken test models** (open cube, non-manifold, flipped face) are generated in code and loadable from the info bar, to test refusals.
+19. **View mode (Original / Result / Overlay) and the overhang highlight** are left for the steps that produce a result.
+
+## Step 3 – SDF core
+
+20. **One body per file (answer from Matic).** A file with more than one separate body is refused at load. A closed shell wound inwards inside a body is a cavity, not a second body, and is accepted.
+21. **Distance field in three accuracy tiers.** Exact distance and sign within ~3 voxels of the surface; distance to the nearest surface sample inside the body down to the depth a style needs (shell thickness); a Euclidean distance transform (about one voxel accurate) everywhere else. This keeps the expensive exact computation to a thin band.
+22. **Exact distance without a ray/BVH library:** the surface is covered with sample points in a KD-tree; the triangles of the nearest samples are candidates and the exact closest point on each is computed. Sign comes from angle-weighted pseudo-normals, which is exact for the watertight, consistently wound meshes that validation guarantees.
+23. **Grid origin is shifted by 0.37 voxel** so axis-aligned faces of CAD parts do not land exactly on grid nodes (which makes marching cubes emit zero-area triangles). Remaining exact zeros are nudged inside by 0.0001 voxel.
+24. **Voxel size (provisional until step 7).** Final: thinnest feature / 3, 4 or 6 voxels for Draft, Normal, Fine, with node budgets of 8, 20 and 48 million. Preview: thinnest feature / 2, at most 1.2 million nodes. With the default 2 mm features Normal gives 0.5 mm voxels.
+25. **Envelope fit after marching cubes.** Vertices outside the input surface are moved onto it. Marching cubes also bridges concave edges of the part with flat triangles that lie outside; edges whose midpoint is more than 0.02 voxel outside are split and the new vertex is placed on the crease (two passes). Measured result on the bracket at Normal: vertices within 1 µm, everything else within 0.1 voxel (worst case 0.03 mm at two corner points). A strict zero is not reachable with a triangle mesh on curved concave surfaces.
+26. **Flat faces are reproduced exactly**, so the bounding box matches the input far better than one voxel. Sharp convex edges are rounded by up to about one voxel.
+27. **One connected body is decided on the voxel grid** (largest solid region is kept, the rest counted as fragments), not on mesh components: a hollow shell is one body but its mesh has two surfaces (outside and cavity).
+28. **Styles from later steps fall back with a warning** so the app stays usable: surface A/B/C is shown as Solid, interior Struts as Hollow.
+29. **Surface None + interior Hollow** describes an empty part: see decision 33.
+30. **Preview/final run synchronously for now.** The newest request replaces older ones in the UI; background jobs, progress and cancel come in step 7. Body fields are cached per model (latest preview and final grid), so changing a setting does not recompute them.
+31. **Result is sent to the browser as an indexed binary mesh** (JSON header + float32 vertices + uint32 faces), about a third the size of an STL.
+32. **Clipping default direction** shows the cut towards the isometric camera (keeps low X, high Y, low Z); Flip reverses it.
+
+## Step 4 – Interior struts
+
+33. **None + Hollow is hidden in the UI (answer from Matic).** The schema lists invalid combinations (`INVALID_COMBINATIONS`) and rejects them; the settings panel hides the option that would complete one (Hollow when the surface is None, None when the interior is Hollow).
+34. **Seeds: Poisson-disk by batched dart throwing.** Random candidates are thrown in rounds; within a round, candidates are accepted in index order unless an earlier accepted point is closer than the cell size. Deterministic for a given random seed (numpy `default_rng`).
+35. **Ghost seeds outside the body.** Seeds are also placed in a layer two cell sizes thick around the body. Without them the Voronoi cells at the surface are unbounded, their edges are infinite and would be dropped, and the lattice would stop short of the skin. With them every edge that reaches the surface is finite and passes through it, so struts run into the skin.
+36. **Voronoi edges from the Delaunay triangulation:** an edge joins the circumcentres of two tetrahedra that share a face. Edges are clipped to the part of them that comes within a strut radius of the body.
+37. **Strut field without rasterising each beam.** Sample points along all beams go into a KD-tree; for each grid node near a beam the nearest samples give the candidate beams, and the exact distance to each candidate axis is computed. If the candidate list may be incomplete it is doubled (16 → 128). Only nodes in the body and near a beam are evaluated.
+38. **Blend = polynomial smooth minimum with k = blend radius**, folded over the candidate beams sorted by distance, so the result does not depend on beam order. The fillet reaches about one blend radius from a sharp joint; joints get up to about half a blend radius thicker. The same smooth minimum joins struts to the skin.
+39. **With surface None, struts are cut by the envelope and loose stubs are removed** as fragments (and counted in a warning). On thin features (the bracket's 2 mm flange) nothing connected remains, so the result is shorter than the input there. A skin avoids this; style B (step 5) is meant for it.
+40. **Preview skips the concave-edge refinement** (decision 25) and only moves stray vertices back, to stay fast.
+41. **Known for step 7:** previews of large or dense parts exceed 5 s (100 mm cube with 5 mm cells: 9 s), because the preview must keep about two voxels across a strut. Preview resolution, memory cap and warnings are tuned in step 7.
+
+## Step 5 – Surface styles A, B, C
+
+42. **Surface seeds: Poisson-disk on the mesh** by dart throwing with area-weighted random points on the triangles; spacing is the straight-line distance (not along the surface). About 1.5 × cell size² of area per seed.
+43. **Seeds do not depend on the voxel size,** so preview and final show the same pattern and lattice. Interior and surface seeds use independent random streams derived from the random seed, so changing the interior style does not change the surface pattern (this changed which lattice a given seed produces compared with step 4).
+44. **Pattern field: exact distance to the cell wall instead of raw F2 − F1.** For the nearest seed s1 and another seed sj, the distance to the wall between their cells is (|x − sj|² − |x − s1|²) / (2 |s1 − sj|). In the middle of a wall this is (F2 − F1) / 2, but it stays a true distance everywhere, so ribs have a constant width. The five nearest other seeds are used; a smooth minimum over them rounds the cell corners.
+45. **A · Perforated: hole = the cell scaled about its seed to "hole size" %.** So 60 % means each hole is its cell at 60 % linear size (about 36 % open area), and the wall between two holes is (100 − hole size) % of the distance between their seeds. Hole corners are rounded with a radius of 0.3 × cell size × hole size.
+46. **B · Rib lattice: ribs are as deep as they are wide** (square section, rib width × rib width, lying on the surface); there is no shell thickness setting for B. The blend radius fillets the rib joints.
+47. **C · Embossed: cells are recessed by the emboss depth,** inset half a rib width from the cell walls, corners rounded by 0.15 × cell size. The envelope is unchanged because the ribs stay at the original surface.
+48. **Patterned skin + Solid interior:** the solid core starts below the skin (below the shell thickness, or below the rib depth for B), so A gives blind pockets and B gives raised ribs on a solid core.
+49. **Strut ends and open skins.** Surface and interior seeds are independent (as the spec asks), so struts do not line up with ribs or with the material between holes. To avoid strut ends poking out through holes, struts stop half-way into the skin for A and B, and below the recess floor for C. Where a strut meets skin material it merges with the blend radius; where it meets a hole it ends as a short stub behind the hole. Pieces left unconnected are removed as fragments and counted.
+50. **Voxel size for patterned skins** also considers the wall between holes (A) and twice the emboss depth (C), so C at default settings uses 0.4 mm voxels at Normal.
+51. **A surface cell size that leaves fewer than 4 cells on the part is refused** with a message.
+
+## Step 6 – Modifiers
+
+52. **Grading scale.** The setting value (cell size, strut diameter, rib width, shell thickness) is what you get in the middle of the grading range. With strength g the ratio between the two ends is 1 + 3 g: 2.5 : 1 at the default 50 %, 4 : 1 at 100 %, changing geometrically in between. Dense means smaller cells and/or thicker members, depending on the grading target.
+53. **Where the grading runs.** X / Y / Z: from the low to the high end of the bounding box. From skin: from the surface to the deepest point of the part. "Denser at start" makes the surface (or the low end of the axis) the dense end.
+54. **What is graded.** Cell size: interior and surface seed spacing. Thickness: strut diameter (struts taper linearly along their length), rib width, and shell thickness (and with it the rib depth of style B). Emboss depth and hole size (%) are not graded; hole corner rounding follows the local cell size.
+55. **From skin + thickness on the skin** has almost no visible effect on the skin itself (the skin is all at depth 0); it grades the struts.
+56. **Graded seeds stay independent of the voxel size.** Depth below the skin is tabulated once on a coarse grid whose spacing is fixed by the part size (longest side / 64), from points sampled on the input triangles.
+57. **Variable-spacing Poisson-disk:** a point is accepted unless an already accepted point is closer than its own local spacing; candidates are thinned so their density follows the local spacing, and are processed in bands of similar spacing, widest first.
+58. **Voxel size follows the thin end** of a thickness grading, so strong thickness grading makes the final slower and may hit the memory cap.
+59. **Solid base** is the part of the body within the base thickness of its lowest Z, joined with a sharp union; it follows the envelope, so on a sphere it is a cap, not a disc.
+60. **Printability warnings** are computed from the settings alone (including the thin end / smallest cells of a grading) and never block generation: shell wall, rib width, strut diameter, wall between holes (A) and shell under recesses (C) against 3 × nozzle; holes (A, about hole size × cell size) and openings between ribs (B, cell size − rib width) against 5 × nozzle. Only settings of the selected styles are checked.
+61. **Known for step 7:** previews at 1 mm voxels break up members thinner than about 1.5 mm (the thin end of a strong grading shows many removed fragments in the preview but is fine in the final), and from-skin cell grading takes about 9 s to preview on a 100 mm cube.
+
+## Step 7 – Preview and final pipeline
+
+62. **Jobs run on one background worker thread in the engine.** `POST /api/models/{id}/jobs` starts one, `GET /api/jobs/{id}` reports state, progress and a message, `POST /api/jobs/{id}/cancel` cancels, `GET /api/jobs/{id}/result` returns the mesh. The UI polls every 150 ms. A thread (not a separate process) is used so the cached body fields can be shared; the heavy numpy/scipy work releases Python's lock, so the server keeps answering.
+63. **The newest request wins.** Starting a job cancels every older unfinished job, so changing a setting during a final cancels the final and starts a preview.
+64. **Cancel is cooperative:** the pipeline checks for it at each progress report (about a dozen checkpoints plus one per chunk of strut evaluation). The UI reacts at once and keeps the previous result on screen; the engine stops within a few seconds at worst (one marching-cubes or distance-transform call cannot be interrupted).
+65. **Automatic detail level.** Final: 3 / 4 / 6 voxels across the thinnest feature for Draft / Normal / Fine, limited by the node limit of the quality level (8 / 20 / 48 million) and by the memory budget. The thinnest feature includes the thin end of a thickness grading, the wall between holes (A) and twice the emboss depth (C).
+66. **Memory budget:** 40 % of the installed RAM, at most 8 GB, at 96 bytes per grid node (measured peak: about 88). Override with the environment variable `VORONOI_MEMORY_MB`. When a limit makes the grid coarser than wanted, the result carries a warning that names the cause and the voxels left across the thinnest feature.
+67. **Preview detail.** Normally 2 voxels across the thinnest feature within 1.2 million nodes. Below 1.5 voxels across, thin members break up, so the preview is allowed up to 3 million nodes to keep 1.5; if that is still not enough it stays coarse and says so. Consequence: previews of large parts with thin features take longer than 5 s (they would otherwise be wrong).
+68. **From-skin depth table** is now built with a distance transform on a fixed grid (longest side / 128) instead of nearest-point queries: 3.7 s → about 0.3 s.
+69. **Viewport redraws on demand** (camera moved or content changed) instead of every frame, so multi-million-triangle results do not load the GPU while idle.
+70. **Overhang highlight** is done in the shader: faces whose normal points more than 45° below horizontal are red, except within 0.3 mm of the lowest Z (they rest on the bed). It applies to the original and the result.
+71. **Not done here:** decimation of very large results (step 8, with export).
+
+## After step 7 – struts attached to open skins (request from Matic)
+
+72. **Struts know where the holes are.** With an open skin (A or B), every strut that reaches the skin is re-aimed: it keeps its inner end and its outer end moves to the nearest cell wall of the surface pattern (the middle of the wall between two holes, or of a rib), 60 % of the skin depth below the surface. Strut pieces that lie entirely in or beyond the skin are dropped. This replaces the stubs described in decision 49; surface and interior cell sizes stay independent. Closed skins (C, Solid) need no change: a strut meets material wherever it arrives.
+73. **How the wall is found:** from the point where the strut enters the skin, step onto the plane half-way between the two nearest surface seeds, put the point back on the surface, repeat four times; then go inwards along the surface normal and correct onto the wall plane once more.
+74. **Consequence:** the outermost struts change direction slightly (by at most about half a hole), and several struts may share one wall. With A or B plus Struts the "floating fragments removed" warning no longer appears on the test parts.
+
+## Step 8 – Export and validation
+
+75. **The engine validates what the file will contain.** An STL stores 32-bit coordinates and every reader merges vertices with identical coordinates. So before validation the result is rounded to 32 bits and coinciding vertices are merged (collapsed triangles dropped). Display, validation, repair and export all use that mesh. (Found by test: a few vertices pulled onto the same corner of the part were distinct in the engine but merged in the file, which made the reloaded STL not watertight.)
+76. **Validation = the same checks as for input:** no open edges, no non-manifold edges, consistent winding, positive volume, one body (cavities allowed).
+77. **Automatic repair, only when validation fails:** drop collapsed and duplicate triangles, close small holes (triangle- or quad-sized), make the winding consistent, remove stray pieces (keeping the largest body and the cavities inside it). The repairs are listed in a warning. If a defect remains the result is shown, an error explains it, and Export stays disabled; the engine also refuses to export it.
+78. **Export = two browser downloads:** `<input name>_voronoi.stl` and `<input name>_voronoi.json`, both to the browser's download folder. A browser page cannot choose the folder or write two files to it silently; Chrome and Edge may ask once to allow multiple downloads.
+79. **The settings file** holds the settings, the input file name with its size and triangle count, the voxel size and triangle count of the result, and the program version. No date or timing, so it is identical for identical results. Loading (or dropping) it in the app applies the settings; unknown keys are ignored and reported.
+80. **Export is tied to the final result on screen.** It is enabled when a final passes validation and disabled the moment a setting changes, a preview starts or another model is loaded.
+81. **The STL is built from the mesh the browser already shows** (the engine keeps the last two results), so exporting does not regenerate anything. The writer is our own: fixed 80-byte header, 32-bit little-endian, normals computed from the triangles, no negative zeros.
+82. **No decimation.** The spec makes it optional. Marching cubes over-tessellates flat areas (a default 100 mm part is about 2.3 million triangles, 115 MB), but a simplifier that guarantees a watertight result inside the envelope is a project of its own; Draft quality roughly halves the size. Candidate for phase 2.
+83. **Bounding-box criterion: documented exceptions** for Surface None + Struts and for patterned skins on curved surfaces (see README, Acceptance criteria).
+84. **Slicer check is manual:** installing a slicer in the build environment was not possible, so "slices without errors" is verified by hand; the automated stand-in is the trimesh check on the exported bytes.
+
+## After step 8 – Smoothness (request from Matic)
+
+85. **Smoothness works on the surface, not the voxel grid.** Halving the voxel size costs 8 × the memory and time. Instead each level splits every triangle into four and moves the vertices along their normals onto the zero level of the exact field (true round struts, true cell walls, exact body surface near the envelope). Two field evaluations per vertex: a step by the field value, then a secant step.
+86. **Setting:** Smoothness = Off / Smooth (1 level, 4 × triangles) / Extra smooth (2 levels, 16 ×), in the Print group, default Off, final only (the preview is unchanged). Default stays Off so that default finals keep their speed and size.
+87. **Safeguards.** A vertex moves at most 0.6 voxel (halved per level), so it cannot jump to another part of the surface. A triangle that turns by more than about 75° has its vertices put back (no folded triangles). After smoothing, vertices outside the input envelope are moved back onto it, and the usual validation and repair run on the result.
+88. **What it does and does not fix.** Facets on struts, joints, fillets and curved skins go (strut radius is right to within 0.01 mm). Sharp edges (rib edges, hole rims, the body's own edges) get finer saw-teeth, about half the size per level, but stay slightly ragged, because the mesh has no edge running along them. Features lost at the voxel size (too thin to resolve) do not come back: that needs a higher Final quality.
+89. **Limits.** At most 12 million triangles (less on a small memory budget: 260 bytes per output triangle); the level is reduced with a warning when the limit would be exceeded. Measured: bracket 100 mm 3.7 s → 6.9 s (0.8 M triangles) → 19 s (3.1 M); cube 100 mm 21 s → 71 s (8.9 M triangles, about 3 GB), Extra held to one level.
+90. **The exact field is a second implementation of the construction in generate.py** (`exact_field.py`), kept separate so the grid pipeline stays untouched. A test checks, for nine style/grading/base combinations, that the unsmoothed mesh lies on its zero level.
+
+
+## Edge rounding of the skin (request from Matic: skin still jagged after smoothing)
+
+91. **Cause:** the skin is made almost entirely of sharp edges (rib sides meeting the outer and inner faces, hole rims, recess edges). A sharp edge cannot be represented by triangles that do not run along it, so marching cubes saw-tooths it, and smoothing only made the teeth finer (and, at the edge itself, pulled some of them out into spikes).
+92. **Fix: a new setting, Edge rounding (mm), 0–2, default 0.5, for styles A, B, C.** The intersections that make these edges use a smooth maximum (rounded intersection) with that radius; the concave corners (recess floor to rib side for C, pocket bottoms for A/B on a solid core) use a smooth minimum. The smooth maximum never lies outside the sharp shape, so rounding only removes material at convex edges, and the original part's own edges (and with them its dimensions) are not rounded. Measured on the 60 mm sphere with Smooth: share of sharp (> 60°) mesh edges down from 3.3 % to 0.3 % (ribs), 1.4 % to 0.2 % (holes), 1.2 % to 0.05 % (recesses); generation time unchanged.
+93. **Default 0.5 mm changes the look of default results** (slightly rounded rib and hole edges, a little less material) also with Smoothness Off, where the edges are still limited by the voxel grid. Settings files saved before this change have no edge_rounding and load with the default 0.5; set 0 to reproduce an older result.
+94. **Spike guard in smoothing:** after each level (and after the fold guard), a vertex further from the average of its neighbours than the mean edge length is moved to that average, unless that would turn one of its triangles over. With rounding 0 this removes nearly all spikes (about 200 → under 5 on the test sphere); with rounding it rarely triggers. No triangle of a smoothed result is ever folded over (tested).
+95. **The exact field now uses the exact distance through the whole skin depth** (not only within 1.5 voxels of the surface), so the skin's inner face is smoothed onto the true offset surface too.
+
+## Flaps along rib edges (report from Matic, after Edge rounding)
+
+96. **Cause:** where several struts meet, blending them adds material slightly beyond the reach of any single strut. The voxel pipeline included that zone (its search reaches a voxel further), but the exact field used for smoothing did not, so there it treated the material as missing and smoothing pulled the surface in, leaving small flaps. Fix: strut influence = strut radius + margin + blend radius, used by both. The voxel and exact fields now agree to within 0.03 mm near the surface (was 0.36 mm); a regression test checks it.
+
+## Keep solid: picked edges (request from Matic: "keep certain edges so the generator doesn't remove key elements")
+
+97. **Picked edges (Matic's choice, from three options):** sharp edges of the input are found on load and drawn in the viewport; the user clicks the ones to keep. Alternatives offered and not chosen: automatic by angle, picking faces. Picking faces (for example a flat mounting face or the inside of a hole) could be added later with the same mechanism.
+98. **Sharp edge = the two triangles meet at more than 30°.** Sharp mesh edges are joined into one model edge through every vertex where exactly two meet, so model edges run corner to corner, and a round hole rim is one edge (its facets meet at under 30°). Fixed threshold, no setting. Meshes with more than 300,000 sharp mesh edges (scans, noise) offer no picking.
+99. **Edge numbers depend only on the mesh,** so the same STL file always gives the same numbers and a saved settings file (new setting `keep_edges`, a list of numbers) reproduces the result. A different export of the same part from CAD may number them differently; numbers beyond the model's edge count are refused with a message. Loading another model clears the kept edges.
+100. **Kept zone = everything inside the part within Keep width (0.5–20 mm, default 3) of a kept edge,** built as a tube round the edge, clipped to the part, and joined to skin and struts with a smooth union of the blend radius. Where the zone ends on a face its edge is rounded with the Edge rounding radius (patterned skins). It works with every surface and interior style and with smoothing.
+101. **Edges are drawn as 3 px lines on top of the original and the result** (Edges checkbox to hide them); a click within 8 px of a line toggles that edge; a drag orbits as before.
+
+## Curved (filleted) edges in Keep solid (request from Matic)
+
+102. **A fillet has no sharp crease**, so it is found differently: the surface is split into flat pieces (triangles within 0.5° of each other); where two neighbouring pieces meet at an angle up to 30°, the local radius is about (their average width) / (angle). Pieces joined with a radius of at most 8 mm form a strip, and every strip that turns the surface by at least 30° is one curved edge. Facet angles above 30° still count as sharp edges, so a fillet tessellated into only 2 or 3 facets appears as 2 or 3 sharp edges instead.
+103. **What counts:** fillets and rounds up to 8 mm radius, and the walls of holes and bosses up to 8 mm radius (a hole wall is one curved edge, which lets a hole be kept solid). Not: large curved surfaces (a 10 mm radius cylinder, the test spheres). The 8 mm and 30° limits are fixed, no settings.
+104. **Numbering:** sharp edges keep their numbers (settings saved before still name the same edges); curved edges are numbered after them.
+105. **Display and keep zone:** a curved edge is drawn, and kept, as the lines between its facets (a band of lines along the fillet); one click anywhere on the band selects the whole fillet. The kept zone is everything inside the part within Keep width of those lines, so it covers the whole fillet surface.
+106. **New test part `filleted_bracket`** (60 × 40 × 40 mm L with an 8 mm outer round and a 5 mm inner fillet, 12 facets each): 12 sharp + 2 curved edges. Listed with the test models in the app; not part of the acceptance runs (which stay on the three parts from the spec).
+
+## Kept edges are drawn by struts (clarification from Matic)
+
+107. **Meaning, per Matic:** keeping an edge means the Voronoi struts make that edge, not that the edge is left out (as without keeping) and not that a block of plain solid is left in the Voronoi body (as built first, decision 100, now replaced).
+108. **Construction:** a kept edge gets a lattice member along it, shaped like a cell wall of the surface pattern lying exactly on the edge: on each face a band half the Edge strut width wide and `depth` deep. Depth = the member's width for ribs (B) and bare struts (None), the shell thickness for A, C and Solid. The member is joined to skin and struts with the blend radius, its edges rounded with Edge rounding. Nothing deeper than the member is filled.
+109. **Per style:** B — a rib along the edge, the cells end on it. None — a strut along the edge that the interior struts join (this also keeps thin features such as the bracket's flange, which bare struts lose). A — a strip of shell along the edge with no holes in it. C and Solid — no visible change (the edge is already closed shell).
+110. **Curved edges** get the member over the whole fillet plus half the width either side.
+111. **Setting renamed and resized:** Keep width (0.5–20 mm, default 3) → Edge strut width (0.8–10 mm, default 2, the default rib width and strut diameter). Settings files with keep_width 3 load unchanged and draw a 3 mm member.
+112. **Not done: making the Voronoi tessellation itself conform to the edge** (placing seeds so a cell wall falls exactly on the edge). The member along the edge looks and works the same; cells end on it at irregular joints, as Voronoi walls do. Conforming seeds would be the next step if the joints need to look more regular.
+113. **One construction for voxel grid and smoothing** (`edge_members.py`), so they cannot disagree (the cause of the flaps in decision 96).
+
+## Speed: all CPU cores (request from Matic)
+
+114. **Measured before:** a final of the 100 mm cube used 1.5 of 4 cores on average (default 22 s, with Smooth 108 s). The CPU, and mostly the speed of one core, was the limit; RAM was not (1–4 GB used), and the GPU is not used for generating.
+115. **Threads, not processes:** the heavy steps (distance to the input surface, strut field, surface pattern, smoothing projection, envelope fit) are cut into chunks that run on a thread pool with one thread per core (`parallel.py`). numpy and scipy release Python's lock during the numerical work, and threads share the big voxel arrays without copying them (processes would copy them, on Windows completely). Work started inside a chunk runs serially, and KD-tree queries inside a chunk use one core, so cores are not oversubscribed. `VORONOI_THREADS` limits the thread count.
+116. **Same result on any number of cores:** every chunk writes only its own slice; tests check byte-identical STLs with 1 and 4 threads.
+117. **The smoothing safety guards were most of the smoothing time** (spikes 35 s, folds 28 s of 108 s): they recomputed the whole mesh every round with a slow accumulation routine. Now neighbour averages and normals use fast counting (bincount), and later rounds only look at triangles around vertices that changed. Same guarantees.
+118. **Result on the 4-core test machine, 100 mm cube:** default final 22 s → 12.6 s, with Smooth 108 s → 45 s. Remaining serial parts: the distance transform, marching cubes, and the final checks (validation, welding).
+
+## Skin still jagged (report from Matic)
+
+119. **Findings:** (a) with Smoothness Off, the default, hole rims, rib edges and recess edges are voxel-stepped; with Smooth they are clean; (b) with style C, struts ended exactly at the recess floor and their blend pushed small blobs up through it; (c) about 0.02 % of triangles are folded (they show as small orange specks), almost all on the skin's inner face where struts join and deep in the lattice, already present before smoothing; (d) the part's own sharp edges are not rounded (by design, to keep the envelope), so where the pattern crosses them some voxel steps remain.
+120. **Fixed (b):** struts now end half-way between the recess floor and the shell's inner face, inside the floor material. A regression test checks that nothing stands above the floor inside a recessed cell.
+121. **Not changed yet:** the default Smoothness stays Off, because Smooth multiplies triangles by 4 (the 100 mm cube: 2.2 → 8.9 million triangles, about 445 MB of STL). Smoothing only where the surface needs it would give smooth results at a fraction of the size; that is the next candidate. (c) and (d) are noted for later.
+
+## Final stuck at 95 % with Draft + Extra smooth (report from Matic)
+
+122. **Cause:** when the final check finds a defect, the automatic repair ran trimesh's `fix_winding`, which is extremely slow on large meshes (181 s for one flipped triangle in 3.2 million; minutes more at the 12-million-triangle limit of Extra smooth), and the progress bar stayed at "Checking the result 95 %" meanwhile.
+123. **Fix:** own winding repair working on whole arrays: neighbouring triangles form a tree from one root per piece, whether each triangle must turn is found by pointer jumping along the tree, and each piece keeps the orientation most of its triangles already had (so cavities stay wound inwards). 3.2 million triangles with 500 flipped: 6.7 s for the whole repair. The duplicate-triangle check was also replaced (sorting rows instead of `unique(axis=0)`), and holes are only looked for when there are open edges. A test repairs 1.8 million triangles within 20 s.
+124. **Progress:** "Repairing the mesh" (97 %) is shown while the repair runs.
+125. **Open:** why that result needed a repair at all is not known (the test parts do not need one with Draft + Extra smooth); the warning that lists the repairs will show what it was.
+126. **Clearer warning when smoothing is reduced** (question from Matic): it now names both levels, the triangle count the requested level would give, the limit and why it exists, and the count of the result; the Draft hint is left out when Draft is already chosen.
+
+## 3MF export (request from Matic)
+
+127. **3MF is the default export; binary STL stays available** (setting Export format). Matic chose 3MF when asked; the spec said binary STL. Measured: 50 mm cube with Smooth 67 MB STL → 16 MB 3MF; bracket 9.6 MB → 1.7 MB. Same triangles, so accuracy and validity are unchanged.
+128. **Own 3MF writer, standard library only:** a zip package with `[Content_Types].xml`, `_rels/.rels` and `3D/3dmodel.model` (3MF core spec, unit millimetre, one object, one build item). Coordinates are written to 0.0001 mm (the STL's 32-bit floats are about as fine). Text is generated from integers (several times faster than float formatting), and the model is deflate-compressed on all cores in independent blocks joined into one stream (the method pigz uses); the zip is written directly with a fixed date, so the same result gives the same bytes on any number of cores. About 2 s for 1.4 million triangles, about 15 s at 9 million.
+129. **Changing only the export format does not start a new preview or disable Export**, so a finished final can be exported in both formats. The settings file records the format chosen at export.
+130. **Checked with an independent reader** (trimesh with lxml, once, not a dependency): every triangle read back, watertight, same volume and size. The tests use a standard-library XML reader.
+
+## Repository (marsovc/voronoi-converter)
+
+131. **What is committed:** source, tests, documentation (README, SPEC, DECISIONS), start scripts, the generated TypeScript settings and the built UI (`frontend/dist`, so a clone runs without Node.js). Not committed: `.venv`, `node_modules`, caches, download zips.
+132. **Line endings fixed in `.gitattributes`:** `start.bat` keeps CRLF and `start.sh` LF on every platform (a CRLF `start.sh` would not run on macOS/Linux, an LF `start.bat` can misbehave on Windows).
+133. **README screenshots** (`docs/screenshots/`) are taken from the running app with the built-in test models at 2x resolution: default styles on the bracket, rib lattice on the sphere, a clipped cube, edge picking on the filleted bracket, and kept edges drawn by ribs.
