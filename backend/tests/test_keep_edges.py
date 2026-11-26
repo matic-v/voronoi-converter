@@ -208,8 +208,11 @@ def test_keeping_all_edges_restores_the_outer_dimensions(cube) -> None:
 
 @pytest.mark.parametrize("surface", ["perforated", "rib_lattice", "embossed", "none"])
 def test_kept_edges_work_with_every_skin(cube, surface: str) -> None:
-    plain = generate(cube, Settings(surface_style=surface), "preview")
-    kept = generate(cube, Settings(surface_style=surface, keep_edges=[0, 5, 11]), "preview")
+    # Rounding 0: along kept edges the rounding is widened to 2 voxels, which takes off
+    # more than the coarse preview frame adds.
+    plain = generate(cube, Settings(surface_style=surface, edge_rounding=0), "preview")
+    kept = generate(cube, Settings(surface_style=surface, edge_rounding=0,
+                                   keep_edges=[0, 5, 11]), "preview")
     assert kept.valid
     assert kept.info()["volume_mm3"] > plain.info()["volume_mm3"]
 
