@@ -119,3 +119,7 @@ a { color: var(--accent); }
 
 .field .note { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .field .count { flex: 1; }
+
+.field label.check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.field label.check input { accent-color: var(--accent); }
+#viewport-hint.picking { color: var(--accent); font-weight: 600; }

@@ -16,7 +16,7 @@ from .edge_members import member_depth, member_field, member_reach
 from .grading import Grading
 from .settings import Settings
 from .strut_field import StrutEvaluator, smooth_max, smooth_min
-from .surface_pattern import SurfacePattern
+from .surface_pattern import SurfacePattern, pointed_tops
 
 HOLE_ROUNDING = 0.3
 RECESS_ROUNDING = 0.15
@@ -64,6 +64,7 @@ class ExactField:
                         p = points[band]
                         local_cell = s.surface_cell_size * self.grading.cell_scale(
                             p, depth=depth_below[band])
+                        pointed = s.pointed_holes and surface in ("perforated", "rib_lattice")
                         if surface == "perforated":
                             fraction = s.hole_size / 100.0
                             wall[band] = self.pattern.wall_distance(
@@ -71,6 +72,11 @@ class ExactField:
                         elif surface == "rib_lattice":
                             wall[band] = self.pattern.wall_distance(p, blend) \
                                 - 0.5 * s.rib_width * scale[band]
+                        if pointed:
+                            from .generate import opening_inradius
+                            wall[band] = pointed_tops(self.pattern, p, wall[band],
+                                                      opening_inradius(self.pattern, s),
+                                                      s.overhang_angle)
                         else:
                             wall[band] = self.pattern.wall_distance(p, RECESS_ROUNDING * local_cell) \
                                 - 0.5 * s.rib_width * scale[band]

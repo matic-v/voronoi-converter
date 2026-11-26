@@ -193,11 +193,24 @@ def clip_edges_to_body(edges: np.ndarray, body: BodyField, reach: float) -> np.n
     return np.stack([p + d * t0[:, None], p + d * t1[:, None]], axis=1)
 
 
+def stretched_voronoi_edges(seeds: np.ndarray, stretch: float = 1.0) -> np.ndarray:
+    """Voronoi edges with the cells stretched along Z by `stretch`: computed in a space
+    squashed along Z, then stretched back. The seeds stay where they are, so each cell
+    keeps its volume but becomes taller and narrower, and its edges steeper."""
+    if stretch == 1.0:
+        return voronoi_edges(seeds)
+    squashed = seeds.copy()
+    squashed[:, 2] /= stretch
+    edges = voronoi_edges(squashed)
+    edges[:, :, 2] *= stretch
+    return edges
+
+
 def interior_edges(body: BodyField, lo: np.ndarray, hi: np.ndarray, cell_size: float,
                    reach: float, rng: np.random.Generator, scale=None,
-                   scale_range: tuple[float, float] = (1.0, 1.0)) -> np.ndarray:
+                   scale_range: tuple[float, float] = (1.0, 1.0), stretch: float = 1.0) -> np.ndarray:
     """Voronoi edges of fresh Poisson-disk seeds, clipped to the body. Shape (E, 2, 3)."""
     seeds = poisson_seeds(body, lo, hi, cell_size, rng, scale, scale_range)
-    edges = voronoi_edges(seeds)
+    edges = stretched_voronoi_edges(seeds, stretch)
     edges = clip_edges_to_box(edges, np.asarray(lo) - reach, np.asarray(hi) + reach)
     return clip_edges_to_body(edges, body, reach)

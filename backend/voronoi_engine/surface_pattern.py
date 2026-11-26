@@ -86,3 +86,40 @@ class SurfacePattern:
             out[start:stop] = value
         run_chunks(work, len(points), CHUNK)
         return out
+
+
+STEEP_WALL_NZ = 0.9  # surfaces flatter than this (|normal z| above it) get no pointed tops
+
+
+def prepare_pointed_tops(pattern: SurfacePattern, surface_normals: np.ndarray) -> None:
+    """Store, per seed, the outward normal of the surface there and the distance to the
+    nearest other seed (needed by pointed_tops)."""
+    pattern.normal = surface_normals
+    distance, _ = pattern.tree.query(pattern.seeds, k=2)
+    pattern.neighbour = distance[:, 1]
+
+
+def pointed_tops(pattern: SurfacePattern, points: np.ndarray, opening: np.ndarray,
+                 inradius: np.ndarray, overhang_deg: float) -> np.ndarray:
+    """Give every opening (hole or gap between ribs) on a steep wall a pointed top.
+
+    `opening` is positive inside the opening. Above each cell's seed, two lines at the
+    flattest printable angle (90 - overhang_deg from horizontal) meet in a point; they
+    touch the circle of radius `inradius[seed]` round the seed (a teardrop shape), so
+    the opening keeps its size but has no flat ceiling. Returns the new opening field.
+    """
+    _, seed = pattern.tree.query(points, k=1, workers=kd_workers())
+    n = pattern.normal[seed]
+    up = np.array([0.0, 0.0, 1.0])
+    v_dir = up - n[:, 2:3] * n  # "up" within the wall
+    v_len = np.linalg.norm(v_dir, axis=1)
+    steep = (np.abs(n[:, 2]) <= STEEP_WALL_NZ) & (v_len > 1e-9)
+    v_dir = v_dir / np.maximum(v_len, 1e-12)[:, None]
+    u_dir = np.cross(n, v_dir)  # horizontal within the wall
+    rel = points - pattern.seeds[seed]
+    u = np.einsum("ij,ij->i", rel, u_dir)
+    v = np.einsum("ij,ij->i", rel, v_dir)
+    beta = np.radians(90.0 - overhang_deg)  # roof angle from horizontal
+    apex = inradius[seed] / np.cos(beta)
+    roof = (apex - v - np.abs(u) * np.tan(beta)) * np.cos(beta)  # positive below the roof
+    return np.where(steep, np.minimum(opening, roof), opening)

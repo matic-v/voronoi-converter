@@ -21,8 +21,9 @@ from pydantic import BaseModel
 from voronoi_engine import __version__, test_models
 from voronoi_engine.body_field import BodyField
 from voronoi_engine.export import export_stem, settings_document, to_3mf, to_binary_stl
-from voronoi_engine.generate import generate
+from voronoi_engine.generate import field_cache_key, generate
 from voronoi_engine.mesh_io import LoadedMesh, MeshValidationError, load_stl
+from voronoi_engine.orientation import suggest_bed_normal
 from voronoi_engine.progress import Job
 from voronoi_engine.settings import SETTINGS_VERSION, Settings, field_metadata
 
@@ -116,6 +117,15 @@ def upload_model(file: UploadFile) -> JSONResponse:
     })
 
 
+@app.get("/api/models/{model_id}/suggest-bed")
+def suggest_bed(model_id: str, overhang_angle: float = 45.0) -> dict:
+    """The flat face to put on the bed for the least overhanging outer surface."""
+    mesh = MODELS.get(model_id)
+    if mesh is None:
+        raise HTTPException(status_code=404, detail="Unknown model.")
+    return suggest_bed_normal(mesh, min(max(overhang_angle, 30.0), 60.0))
+
+
 @app.get("/api/models/{model_id}/edges")
 def model_edges(model_id: str) -> Response:
     """Sharp edges for display and picking:
@@ -173,7 +183,7 @@ def start_job(model_id: str, request: GenerateRequest) -> JSONResponse:
             for stale in [key for key in FIELD_CACHE if key not in MODELS]:
                 del FIELD_CACHE[stale]
             result = generate(mesh, request.settings, request.mode, cache, job)
-            cache.move_to_end(result.voxel_mm)
+            cache.move_to_end(field_cache_key(result.voxel_mm, request.settings))
             while len(cache) > MAX_FIELDS_PER_MODEL:
                 cache.popitem(last=False)
         return result, pack_mesh(result.info(), result.vertices, result.faces)

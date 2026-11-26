@@ -12,6 +12,7 @@ const GROUPS: { id: SettingField["group"]; title: string }[] = [
   { id: "interior", title: "Interior" },
   { id: "modifiers", title: "Modifiers" },
   { id: "keep", title: "Keep edges" },
+  { id: "printing", title: "Printing (orientation and supports)" },
   { id: "print", title: "Print" },
 ];
 
@@ -41,6 +42,55 @@ export class SettingsPanel {
 
   get value(): Settings {
     return { ...this.settings, keep_edges: [...this.settings.keep_edges] };
+  }
+
+  /** Bed face: the viewport picks it, the engine can suggest it. */
+  private bedHandlers: { pick: () => void; suggest: () => void } = { pick: () => {}, suggest: () => {} };
+  private bedNote = "";
+
+  onBedFace(handlers: { pick: () => void; suggest: () => void }): void {
+    this.bedHandlers = handlers;
+  }
+
+  setBedNormal(normal: number[], note = ""): void {
+    this.bedNote = note;
+    this.commit("bed_normal", normal);
+  }
+
+  setBedNote(note: string): void {
+    this.bedNote = note;
+    this.refresh();
+  }
+
+  private buildBedFace(field: SettingField, row: HTMLElement): HTMLElement {
+    const text = document.createElement("div");
+    text.className = "count";
+    const controls = document.createElement("div");
+    controls.className = "row";
+    const button = (label: string, action: () => void) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      b.addEventListener("click", action);
+      return b;
+    };
+    const reset = button("Reset", () => this.setBedNormal([0, 0, -1]));
+    controls.append(
+      button("Pick face", () => this.bedHandlers.pick()),
+      button("Suggest", () => this.bedHandlers.suggest()),
+      reset,
+    );
+    const note = document.createElement("div");
+    note.className = "note";
+    row.append(text, controls, note);
+    this.syncers.set(field.key, () => {
+      const [x, y, z] = this.settings.bed_normal;
+      const asLoaded = Math.abs(x) < 1e-9 && Math.abs(y) < 1e-9 && z < 0;
+      text.textContent = asLoaded ? "As loaded (its bottom on the bed)" : "Picked face on the bed";
+      reset.disabled = asLoaded;
+      note.textContent = this.bedNote;
+    });
+    return row;
   }
 
   /** Number of sharp edges in the loaded model (shown next to the kept count). */
@@ -75,7 +125,8 @@ export class SettingsPanel {
   }
 
   reset(): void {
-    this.settings = { ...DEFAULT_SETTINGS };
+    this.settings = { ...DEFAULT_SETTINGS, keep_edges: [], bed_normal: [...DEFAULT_SETTINGS.bed_normal] };
+    this.bedNote = "";
     this.refresh();
     this.emit(null);
   }
@@ -92,7 +143,17 @@ export class SettingsPanel {
     for (const field of SETTING_FIELDS) {
       const value = values[field.key];
       if (value === undefined) continue;
-      if (field.kind === "list") {
+      if (field.widget === "bed_face") {
+        const ok =
+          Array.isArray(value) && value.length === 3 &&
+          value.every((v) => typeof v === "number" && Number.isFinite(v)) &&
+          Math.hypot(...(value as number[])) > 1e-9;
+        if (ok) (next as Record<string, unknown>)[field.key] = value as number[];
+        else skipped.push(field.key);
+      } else if (field.kind === "bool") {
+        if (typeof value === "boolean") (next as Record<string, unknown>)[field.key] = value;
+        else skipped.push(field.key);
+      } else if (field.kind === "list") {
         if (Array.isArray(value) && value.every((v) => Number.isInteger(v) && v >= 0)) {
           (next as Record<string, unknown>)[field.key] = [...new Set(value as number[])].sort((a, b) => a - b);
         } else skipped.push(field.key);
@@ -107,6 +168,7 @@ export class SettingsPanel {
       }
     }
     const candidate = next as unknown as Settings;
+    this.bedNote = "";
     const invalid = INVALID_COMBINATIONS.some((combination) =>
       Object.entries(combination).every(([k, v]) => String(candidate[k as SettingKey]) === v),
     );
@@ -120,7 +182,7 @@ export class SettingsPanel {
     return skipped;
   }
 
-  private set(key: SettingKey, value: string | number | number[]): void {
+  private set(key: SettingKey, value: string | number | boolean | number[]): void {
     (this.settings as unknown as Record<string, unknown>)[key] = value;
     // Keep dependent limits valid (emboss depth cannot exceed shell thickness).
     for (const field of SETTING_FIELDS) {
@@ -179,6 +241,17 @@ export class SettingsPanel {
     }
     row.appendChild(label);
 
+    if (field.widget === "bed_face") return this.buildBedFace(field, row);
+    if (field.kind === "bool") {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.id = id;
+      box.addEventListener("change", () => this.commit(field.key, box.checked));
+      this.syncers.set(field.key, () => (box.checked = Boolean(this.settings[field.key])));
+      label.prepend(box);
+      label.classList.add("check");
+      return row;
+    }
     if (field.kind === "list") {
       // Kept edges: picked in the viewport; here only the count and two buttons.
       const note = document.createElement("div");
@@ -270,7 +343,7 @@ export class SettingsPanel {
     return row;
   }
 
-  private commit(key: SettingKey, value: string | number | number[]): void {
+  private commit(key: SettingKey, value: string | number | boolean | number[]): void {
     this.set(key, value);
     this.refresh();
     this.emit(key);
