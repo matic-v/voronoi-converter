@@ -83,7 +83,8 @@ def test_settings_json_round_trip() -> None:
 def test_field_metadata_covers_every_setting() -> None:
     meta = field_metadata()
     assert [m["key"] for m in meta] == list(Settings.model_fields)
-    assert all(m["group"] in {"surface", "interior", "modifiers", "keep", "print"} for m in meta)
+    assert all(m["group"] in {"surface", "interior", "modifiers", "keep", "printing", "print"}
+               for m in meta)
 
 
 def test_generated_typescript_is_up_to_date() -> None:

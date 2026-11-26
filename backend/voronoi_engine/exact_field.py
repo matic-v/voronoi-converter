@@ -72,14 +72,14 @@ class ExactField:
                         elif surface == "rib_lattice":
                             wall[band] = self.pattern.wall_distance(p, blend) \
                                 - 0.5 * s.rib_width * scale[band]
+                        else:  # embossed
+                            wall[band] = self.pattern.wall_distance(p, RECESS_ROUNDING * local_cell) \
+                                - 0.5 * s.rib_width * scale[band]
                         if pointed:
                             from .generate import opening_inradius
                             wall[band] = pointed_tops(self.pattern, p, wall[band],
                                                       opening_inradius(self.pattern, s),
                                                       s.overhang_angle)
-                        else:
-                            wall[band] = self.pattern.wall_distance(p, RECESS_ROUNDING * local_cell) \
-                                - 0.5 * s.rib_width * scale[band]
                     if surface == "embossed":
                         wall[band] = smooth_min(wall[band], d[band] + s.emboss_depth, rounding)
                     skin = shell.copy()
