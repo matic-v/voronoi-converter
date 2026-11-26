@@ -64,7 +64,7 @@ class ExactField:
                         p = points[band]
                         local_cell = s.surface_cell_size * self.grading.cell_scale(
                             p, depth=depth_below[band])
-                        pointed = s.pointed_holes and surface in ("perforated", "rib_lattice")
+                        pointed = s.pointed_holes and surface == "perforated"  # as in generate
                         if surface == "perforated":
                             fraction = s.hole_size / 100.0
                             wall[band] = self.pattern.wall_distance(
