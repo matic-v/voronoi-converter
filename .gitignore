@@ -6,3 +6,4 @@ __pycache__/
 .install-stamp
 *.zip
 # frontend/dist is committed on purpose: the app then runs without Node.js.
+install.log
