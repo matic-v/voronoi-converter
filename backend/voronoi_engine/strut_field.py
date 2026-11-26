@@ -70,6 +70,7 @@ class StrutEvaluator:
         if radius.ndim == 1:
             radius = np.stack([radius, radius], axis=1)
         self.radius_a, self.radius_b = radius[:, 0], radius[:, 1]
+        self.radius_max = float(radius.max()) if radius.size else 0.0
         self.blend = blend
         self.reach = reach
         # Blending several beams at a joint lowers the value below what any single beam
@@ -113,7 +114,12 @@ class StrutEvaluator:
                 result -= weight * weight * (self.blend / 4.0)
 
         # If even the furthest of the k samples is within range, beams may have been missed.
-        limit = np.hypot(self.influence, 0.5 * self.spacing)
+        # Only beams whose value is below result + blend can change the result, and such a
+        # beam has a sample within (axis distance + half a spacing) of the point. The result
+        # from fewer beams is never too small, so this bound is safe. (Without it, points
+        # along a long chain of short beams, whose samples are all close, took the slow path.)
+        relevant = np.clip(result + self.blend + self.radius_max, 0.0, None) + 0.5 * self.spacing
+        limit = np.minimum(np.hypot(self.influence, 0.5 * self.spacing), relevant)
         crowded = distance[:, -1] <= limit
         if crowded.any() and k < min(MAX_K, self.sample_count):
             result[crowded] = self(points[crowded], k * 2)

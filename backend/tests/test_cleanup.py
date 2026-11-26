@@ -93,3 +93,34 @@ def test_falls_back_when_simplifying_breaks_the_mesh(bracket, monkeypatch) -> No
     result = generate(bracket, Settings(surface_style="rib_lattice"), "final")
     assert result.valid
     assert any("only the folded triangles were straightened" in w for w in result.warnings)
+
+
+# --- simplifying patch by patch ---------------------------------------------------------
+
+def test_patches_simplify_about_as_much_as_one_piece(raw) -> None:
+    v, f = raw
+    whole_v, whole_f = cleanup_module.simplify(v, f, 1e-4, patch_faces=10 ** 9)
+    cut_v, cut_f = cleanup_module.simplify(v, f, 1e-4, patch_faces=len(f) // 40)
+    assert validate(whole_v, whole_f) == [] and validate(cut_v, cut_f) == []
+    assert len(cut_f) < 1.15 * len(whole_f)
+    # The patch borders are simplified by the shifted second pass, not left dense.
+    once_v, once_f = cleanup_module._simplify_patches(v, f, 1e-4, len(f) // 40, 0.0)
+    assert len(cut_f) < len(once_f)
+
+
+def test_a_patch_left_broken_is_put_back(raw, monkeypatch) -> None:
+    v, f = raw
+    original = cleanup_module._simplify_patch
+    calls = []
+
+    def breaks_the_third(vertices, faces, epsilon):
+        calls.append(len(faces))
+        out_v, out_f = original(vertices, faces, epsilon)
+        if len(calls) == 3:  # an edge in three triangles
+            out_f = np.vstack([out_f, out_f[:1, [0, 2, 1]]])
+        return out_v, out_f
+
+    monkeypatch.setattr(cleanup_module, "_simplify_patch", breaks_the_third)
+    out_v, out_f = cleanup_module._simplify_patches(v, f, 1e-4, len(f) // 40, 0.0)
+    assert validate(out_v, out_f) == []
+    assert len(out_f) < len(f)  # the other patches are still simplified

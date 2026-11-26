@@ -300,3 +300,11 @@ def test_3mf_export_through_the_api() -> None:
         document = client.get(f"/api/jobs/{final}/export.json?format={chosen}").json()
         assert document["settings"]["export_format"] == chosen
     assert client.get(f"/api/jobs/{final}/export.json?format=obj").status_code == 422
+
+
+def test_fit_splits_a_corner_only_once() -> None:
+    from voronoi_engine.meshing import _new_and_apart
+
+    corner = np.array([[1.0, 2.0, 3.0]])
+    found = np.array([[1.0, 2.0, 3.0], [5.0, 5.0, 5.0], [5.0, 5.0, 5.0 + 1e-6], [7.0, 0.0, 0.0]])
+    assert _new_and_apart(found, corner, 1e-4).tolist() == [False, True, False, True]

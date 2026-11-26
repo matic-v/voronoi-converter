@@ -10,7 +10,9 @@ slicer has to handle each of them.
    folding around that vertex smaller, so the step can only straighten the mesh.
 2. Simplify: quadric edge collapse (pyfqmr, "lossless" mode) removes vertices whose
    removal changes the shape by less than the strength's tolerance. Flat and gently
-   curved areas lose most of their triangles; edges and small details stay.
+   curved areas lose most of their triangles; edges and small details stay. The mesh
+   is cut into patches that are simplified in parallel with their borders fixed; a
+   patch whose collapses left a defect is put back as it was.
 3. Unfold once more (a collapse can leave a fin of its own).
 
 Everything is deterministic: same input and strength give the same mesh.
@@ -163,15 +165,123 @@ def unfold_fins(vertices: np.ndarray, faces: np.ndarray, fin_angle: float,
     return result
 
 
-def simplify(vertices: np.ndarray, faces: np.ndarray, epsilon: float):
+PATCH_FACES = 10_000  # triangles per patch (simplified on its own, in parallel)
+
+
+def _patch_of_faces(vertices: np.ndarray, faces: np.ndarray, target: int,
+                    shift: float = 0.0) -> np.ndarray:
+    """Cut the mesh into boxes of about `target` triangles (by triangle centre); `shift`
+    moves the boxes by that fraction of a box."""
+    centre = vertices[faces].mean(axis=1)
+    low, high = centre.min(axis=0), centre.max(axis=0)
+    n = max(1, int(round((len(faces) / target) ** (1 / 3))))
+    cell = ((centre - low) / np.maximum(high - low, 1e-9) * n + shift).astype(np.int64)
+    n += 1
+    _, patch = np.unique((cell[:, 0] * n + cell[:, 1]) * n + cell[:, 2], return_inverse=True)
+    return patch.ravel()
+
+
+def _rows(points: np.ndarray) -> np.ndarray:
+    points = np.ascontiguousarray(points, dtype=np.float64)
+    return points.view(np.dtype((np.void, 24))).ravel()
+
+
+def _simplify_patch(vertices: np.ndarray, faces: np.ndarray, epsilon: float):
     import pyfqmr
 
     simplifier = pyfqmr.Simplify()
     simplifier.setMesh(np.ascontiguousarray(vertices, dtype=np.float64),
                        np.ascontiguousarray(faces, dtype=np.int32))
-    simplifier.simplify_mesh_lossless(epsilon=epsilon, verbose=False)
+    # The patch's border stays where it is, so the patches still fit together.
+    simplifier.simplify_mesh_lossless(epsilon=epsilon, verbose=False, preserve_border=True)
     v, f, _ = simplifier.getMesh()
     return np.asarray(v, dtype=np.float64), np.asarray(f, dtype=np.int64)
+
+
+def _defective_faces(vertex_count: int, faces: np.ndarray) -> np.ndarray:
+    """Faces on an edge that is not shared by exactly two faces of opposite direction,
+    or with a repeated corner."""
+    n = np.int64(vertex_count)
+    a, b = faces.ravel(), faces[:, [1, 2, 0]].ravel()
+    owner = np.repeat(np.arange(len(faces)), 3)
+    _, edge, count = np.unique(np.minimum(a, b) * n + np.maximum(a, b),
+                               return_inverse=True, return_counts=True)
+    _, directed, directed_count = np.unique(a * n + b, return_inverse=True, return_counts=True)
+    bad_corner = (count[edge.ravel()] != 2) | (directed_count[directed.ravel()] != 1)
+    bad = np.zeros(len(faces), dtype=bool)
+    bad[owner[bad_corner]] = True
+    bad |= (faces[:, 0] == faces[:, 1]) | (faces[:, 1] == faces[:, 2]) | (faces[:, 0] == faces[:, 2])
+    return bad
+
+
+def simplify(vertices: np.ndarray, faces: np.ndarray, epsilon: float,
+             patch_faces: int = PATCH_FACES):
+    """Quadric simplification, patch by patch on all cores. Patch borders stay fixed, so
+    a second pass with the patches shifted by half a box simplifies them too."""
+    for shift in (0.0, 0.5):
+        vertices, faces = _simplify_patches(vertices, faces, epsilon, patch_faces, shift)
+        if len(faces) <= patch_faces:  # a single patch: one pass did everything
+            break
+    return vertices, faces
+
+
+def _simplify_patches(vertices, faces, epsilon, patch_faces, shift):
+    """A collapse can leave a defect (an edge in three triangles); the patches around a
+    defect are put back as they were, so a rare defect costs a little simplification
+    there instead of the whole clean-up."""
+    from .parallel import run_chunks
+
+    faces = np.asarray(faces, dtype=np.int64)
+    patch = _patch_of_faces(vertices, faces, patch_faces, shift)
+    order = np.argsort(patch, kind="stable")
+    bounds = np.searchsorted(patch[order], np.arange(patch.max() + 2))
+    pieces: list = [None] * (len(bounds) - 1)
+
+    def work(start: int, stop: int) -> None:
+        for i in range(start, stop):
+            own = faces[order[bounds[i]:bounds[i + 1]]]
+            used, local = np.unique(own, return_inverse=True)
+            v, f = _simplify_patch(vertices[used], local.reshape(-1, 3), epsilon)
+            # Vertices that kept their exact position (the border, at least) keep their
+            # number; the rest are new.
+            key = _rows(vertices[used])
+            sort = np.argsort(key)
+            found = np.minimum(np.searchsorted(key[sort], _rows(v)), len(used) - 1)
+            same = key[sort][found] == _rows(v)
+            pieces[i] = (v, f, np.where(same, used[sort][found], -1), own)
+
+    run_chunks(work, len(pieces), max_chunk=1)
+
+    def assemble(reverted: np.ndarray):
+        out_v, out_f, out_patch = [vertices], [], []
+        base = len(vertices)
+        for i, (v, f, index, own) in enumerate(pieces):
+            if reverted[i]:
+                out_f.append(own)
+                out_patch.append(np.full(len(own), i))
+                continue
+            new = index < 0
+            index = index.copy()
+            index[new] = base + np.arange(int(new.sum()))
+            base += int(new.sum())
+            out_v.append(v[new])
+            out_f.append(index[f])
+            out_patch.append(np.full(len(f), i))
+        return np.concatenate(out_v), np.concatenate(out_f), np.concatenate(out_patch)
+
+    reverted = np.zeros(len(pieces), dtype=bool)
+    while True:
+        v, f, owner = assemble(reverted)
+        # Checked as exported: vertices that are 32-bit equal are one vertex in the file.
+        v32 = np.ascontiguousarray(v, dtype=np.float32) + np.float32(0.0)
+        _, same = np.unique(v32.view(np.dtype((np.void, 12))).ravel(), return_inverse=True)
+        bad = np.unique(owner[_defective_faces(len(v), same.ravel()[f])])
+        bad = bad[~reverted[bad]]
+        if len(bad) == 0:
+            break
+        reverted[bad] = True
+    used, local = np.unique(f, return_inverse=True)
+    return v[used], local.reshape(-1, 3)
 
 
 def clean_up(vertices: np.ndarray, faces: np.ndarray, strength: str,

@@ -98,7 +98,10 @@ Options: `--port 8080`, `--no-browser`, `--test` (run the test suite instead of 
 - **Edge rounding** (styles A, B, C, default 0.5 mm): rounds the edges of the skin pattern (rib
   edges, hole rims, recess edges) with this radius. Combined with Smoothness it removes the
   saw-tooth look of the skin. The edges of your original part stay sharp, so its dimensions do
-  not change. Set 0 for edges as sharp as the voxel grid allows.
+  not change. Set 0 for edges as sharp as the voxel grid allows. Along kept edges the rounding is
+  at least 2 voxels (for example 1.7 mm with Fine on a 160 mm part): a smaller rounding there left
+  rows of thin blade-like triangles. It returns to the set radius within two radii of the edge
+  strut.
 - **Keep edges (drawn by struts):** after loading, the edges of the model are drawn in blue:
   sharp edges (faces meeting at more than 30°) as single lines, and curved edges (fillets, rounds
   and small holes up to 8 mm radius) as bands of lines along them. Click an edge to keep it (it
@@ -143,8 +146,10 @@ Options: `--port 8080`, `--no-browser`, `--test` (run the test suite instead of 
 
   The fin tips themselves move by up to a few tenths of a millimetre, back into line with
   their neighbours. The result passes the same checks as before (watertight, one body, inside
-  the envelope); if simplifying would leave a defect, less is simplified, and in the worst case
-  only the fins are straightened (a warning says so). Same settings give the same file.
+  the envelope). The mesh is simplified in small patches on all cores; a patch whose
+  simplification would leave a defect is kept as it was. If the result still fails a check, less
+  is simplified, and in the worst case only the fins are straightened (a warning says so). Same
+  settings give the same file.
 - **Overhangs** colours faces that overhang more than 45° (build direction Z up).
 - **Show:** Result, Original, or Overlay (original as a transparent ghost over the result).
 

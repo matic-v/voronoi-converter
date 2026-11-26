@@ -40,6 +40,9 @@ def extract_mesh(field: np.ndarray, grid: Grid) -> tuple[np.ndarray, np.ndarray]
     return vertices, faces
 
 
+MIN_SPLIT_MM = 1e-4  # a split point closer than this to an end of the edge is not added
+
+
 def fit_to_envelope(vertices: np.ndarray, faces: np.ndarray, body: BodyField,
                     passes: int = 2) -> tuple[np.ndarray, np.ndarray]:
     """Make sure the mesh does not stick out of the input surface.
@@ -89,6 +92,16 @@ def fit_to_envelope(vertices: np.ndarray, faces: np.ndarray, body: BodyField,
         usable &= np.linalg.norm(shift, axis=1) <= h
         target = m + np.where(usable[:, None], shift, 0.0)
         _, new_points, new_normal = surface.closest(target, k=8)
+        # At a sharp corner of the part several edges can find the same crease point,
+        # or one a vertex already has: a second vertex there would merge with it in the
+        # file and leave an edge shared by more than two triangles. Split only once.
+        apart = _new_and_apart(new_points, vertices[near], MIN_SPLIT_MM)
+        if not apart.all():
+            split = np.nonzero(too_far)[0]
+            too_far[split[~apart]] = False
+            new_points, new_normal = new_points[apart], new_normal[apart]
+            if not too_far.any():
+                break
 
         new_id = np.full(len(edges), -1, dtype=np.int64)
         new_id[too_far] = n + np.arange(len(new_points))
@@ -99,6 +112,21 @@ def fit_to_envelope(vertices: np.ndarray, faces: np.ndarray, body: BodyField,
         normal = np.vstack([normal, new_normal])
         near = np.concatenate([near, np.ones(len(new_points), dtype=bool)])
     return vertices, faces
+
+
+def _new_and_apart(points: np.ndarray, existing: np.ndarray, distance: float) -> np.ndarray:
+    """True for points further than `distance` from every existing point and from every
+    earlier point in the list."""
+    from scipy.spatial import cKDTree
+
+    keep = np.ones(len(points), dtype=bool)
+    if len(existing):
+        gap, _ = cKDTree(existing).query(points, k=1, distance_upper_bound=distance)
+        keep &= ~np.isfinite(gap)
+    for i, j in sorted(cKDTree(points).query_pairs(distance)):
+        if keep[i]:
+            keep[j] = False
+    return keep
 
 
 def _split_edges(faces: np.ndarray, middle: np.ndarray) -> np.ndarray:
