@@ -33,7 +33,8 @@ mesh with marching cubes, so the output is watertight by construction (details i
 [DECISIONS.md](DECISIONS.md)). The requirements are in [SPEC.md](SPEC.md).
 
 **Status:** version 1.0. All eight steps of the build plan are done, plus later additions (edge
-rounding, smoothing, edges drawn by struts, multi-core generation, 3MF export). See "Acceptance
+rounding, smoothing, edges drawn by struts, multi-core generation, 3MF export, printing
+without supports, clean-up). See "Acceptance
 criteria" below for what is tested automatically and what is left to check by hand.
 
 ## Requirements
@@ -128,6 +129,22 @@ Options: `--port 8080`, `--no-browser`, `--test` (run the test suite instead of 
   - **Pointed hole tops** (on by default, style A): holes on steep walls get
     a pointed top at the overhang angle (a teardrop shape), so the edge above them prints without
     support.
+- **Clean-up** (final only; Off, Light, Medium (default), Strong): removes the small
+  triangles that stick out of the result as shards, mostly along edges and hole rims (folded
+  "fins" left where the voxel grid cannot resolve a crease), then simplifies the mesh: points
+  whose removal changes the shape by less than the strength's tolerance are dropped, so flat and
+  gently curved areas get far fewer triangles while edges and details stay.
+
+  | Strength | Fins straightened | Typical change (99 % of points) | Triangles left (smoothed bracket) |
+  |---|---|---|---|
+  | Light | folded more than 150° | ≤ 0.005 mm | about 40 % |
+  | Medium | folded more than 120° | ≤ 0.01 mm | about 35 % |
+  | Strong | folded more than 100° | ≤ 0.02 mm | about 27 % |
+
+  The fin tips themselves move by up to a few tenths of a millimetre, back into line with
+  their neighbours. The result passes the same checks as before (watertight, one body, inside
+  the envelope); if simplifying would leave a defect, less is simplified, and in the worst case
+  only the fins are straightened (a warning says so). Same settings give the same file.
 - **Overhangs** colours faces that overhang more than 45° (build direction Z up).
 - **Show:** Result, Original, or Overlay (original as a transparent ghost over the result).
 
@@ -179,6 +196,7 @@ backend/
     printability.py   printability warnings
     exact_field.py    the generated shape evaluated at any point
     smoothing.py      smoothness: subdivide and move onto the exact shape
+    cleanup.py        clean-up: straighten folded fins, simplify (pyfqmr)
     edges.py          sharp and curved (filleted) edges of the model, for picking
     orientation.py    print orientation (bed face) and the bed-face suggestion
     supports.py       self-supporting struts

@@ -21,6 +21,7 @@ from .orientation import oriented
 from .meshing import extract_mesh, fit_to_envelope, keep_largest_body, signed_volume
 from .printability import printability_warnings
 from .progress import Job
+from .cleanup import STRENGTHS, clean_up, unfold_fins
 from .repair import repair, validate, weld_as_exported
 from .edge_members import member_depth, member_field, member_reach
 from .exact_field import ExactField
@@ -255,7 +256,10 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
         vertices, faces = smooth(vertices, faces, exact, levels, h, job.sub(0.85, 0.95))
         # Whatever the projection did, nothing may end outside the original envelope.
         vertices, faces = fit_to_envelope(vertices, faces, body, passes=0)
-    job.report(0.95, "Checking the result")
+    if mode == "final" and settings.cleanup != "off":
+        vertices, faces = _clean_up(vertices, faces, body, settings.cleanup,
+                                    job.sub(0.95, 0.98), warnings)
+    job.report(0.98, "Checking the result")
     vertices, faces, _ = weld_as_exported(vertices, faces)
     problems = validate(vertices, faces)
     if problems:  # repair our own defects; if that fails the result must not be exported
@@ -273,6 +277,37 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
         seconds=time.perf_counter() - started, fragments_removed=fragments,
         quality_capped=capped, valid=not problems, problems=problems, warnings=warnings,
     )
+
+
+def _clean_up(vertices, faces, body, strength: str, job: Job, warnings: list[str]):
+    """Unfold fins and simplify. The result must pass the same checks as the mesh it
+    replaces; if it does not (even after repair, and with less simplification), the fins
+    are only unfolded, and if
+    even that fails, the mesh is used as it was."""
+
+    def acceptable(v, f):
+        v, f = fit_to_envelope(v, f, body, passes=0)  # simplifying may shift a point outward
+        welded_v, welded_f, _ = weld_as_exported(v, f)
+        if not validate(welded_v, welded_f):
+            return v, f
+        fixed_v, fixed_f, repairs = repair(welded_v, welded_f)
+        return (fixed_v, fixed_f) if repairs and not validate(fixed_v, fixed_f) else None
+
+    # A rare collapse leaves a defect (an edge in three triangles); simplifying a little
+    # less moves the collapses and almost always avoids it. Still deterministic.
+    for attempt, scale in enumerate((1.0, 0.5, 0.25)):
+        cleaned_v, cleaned_f, _ = clean_up(vertices, faces, strength,
+                                           job.sub(attempt / 3, (attempt + 1) / 3), scale)
+        result = acceptable(cleaned_v, cleaned_f)
+        if result is not None:
+            return result
+    result = acceptable(unfold_fins(vertices, faces, STRENGTHS[strength].fin_angle), faces)
+    if result is not None:
+        warnings.append("Clean-up could not simplify this mesh safely; only the folded "
+                        "triangles were straightened.")
+        return result
+    warnings.append("Clean-up was skipped: it would have left mesh defects.")
+    return vertices, faces
 
 
 def _smoothness_reduced_warning(settings: Settings, triangles: int, wanted: int, used: int) -> str:

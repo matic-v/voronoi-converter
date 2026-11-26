@@ -74,6 +74,13 @@ class Smoothness(str, Enum):
 SMOOTHING_LEVELS = {"off": 0, "smooth": 1, "extra": 2}
 
 
+class Cleanup(str, Enum):
+    OFF = "off"
+    LIGHT = "light"
+    MEDIUM = "medium"
+    STRONG = "strong"
+
+
 class Quality(str, Enum):
     DRAFT = "draft"
     NORMAL = "normal"
@@ -103,6 +110,8 @@ ENUM_LABELS: dict[str, dict[str, str]] = {
     },
     "quality": {"draft": "Draft", "normal": "Normal", "fine": "Fine"},
     "export_format": {"3mf": "3MF (compact, recommended)", "stl": "STL (binary)"},
+    "cleanup": {"off": "Off", "light": "Light", "medium": "Medium (recommended)",
+                "strong": "Strong (fewest triangles)"},
     "smoothness": {"off": "Off", "smooth": "Smooth (4 × triangles)",
                    "extra": "Extra smooth (16 × triangles)"},
 }
@@ -239,6 +248,8 @@ class Settings(BaseModel):
     quality: Quality = Field(Quality.NORMAL, json_schema_extra=_ui("print", "Final quality"))
     smoothness: Smoothness = Field(
         Smoothness.OFF, json_schema_extra=_ui("print", "Smoothness (final only)"))
+    cleanup: Cleanup = Field(
+        Cleanup.MEDIUM, json_schema_extra=_ui("print", "Clean-up (final only)"))
     export_format: ExportFormat = Field(
         ExportFormat.THREE_MF, json_schema_extra=_ui("print", "Export format"))
 

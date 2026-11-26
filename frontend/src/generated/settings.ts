@@ -10,6 +10,7 @@ export type GradingTarget = "cell_size" | "thickness" | "both";
 export type GradingDirection = "denser_at_start" | "denser_at_end";
 export type Quality = "draft" | "normal" | "fine";
 export type Smoothness = "off" | "smooth" | "extra";
+export type Cleanup = "off" | "light" | "medium" | "strong";
 export type ExportFormat = "3mf" | "stl";
 
 export interface Settings {
@@ -41,6 +42,7 @@ export interface Settings {
   nozzle_diameter: number;
   quality: Quality;
   smoothness: Smoothness;
+  cleanup: Cleanup;
   export_format: ExportFormat;
 }
 
@@ -100,6 +102,7 @@ export const DEFAULT_SETTINGS: Settings = {
   "nozzle_diameter": 0.4,
   "quality": "normal",
   "smoothness": "off",
+  "cleanup": "medium",
   "export_format": "3mf"
 };
 
@@ -714,6 +717,32 @@ export const SETTING_FIELDS: SettingField[] = [
       {
         "value": "extra",
         "label": "Extra smooth (16 × triangles)"
+      }
+    ]
+  },
+  {
+    "key": "cleanup",
+    "group": "print",
+    "label": "Clean-up (final only)",
+    "unit": "",
+    "default": "medium",
+    "kind": "enum",
+    "options": [
+      {
+        "value": "off",
+        "label": "Off"
+      },
+      {
+        "value": "light",
+        "label": "Light"
+      },
+      {
+        "value": "medium",
+        "label": "Medium (recommended)"
+      },
+      {
+        "value": "strong",
+        "label": "Strong (fewest triangles)"
       }
     ]
   },
