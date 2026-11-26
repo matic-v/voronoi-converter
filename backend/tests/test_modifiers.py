@@ -219,9 +219,10 @@ def test_grading_makes_voxels_fine_enough_for_the_thin_end() -> None:
 # --- solid base -------------------------------------------------------------------
 
 def test_solid_base_fills_the_bottom_layer(cube) -> None:
-    open_bottom = generate(cube, Settings(surface_style="none", interior_style="struts"), "final")
+    open_bottom = generate(cube, Settings(surface_style="none", interior_style="struts",
+                                          cleanup="off"), "final")
     with_base = generate(cube, Settings(surface_style="none", interior_style="struts",
-                                        solid_base_thickness=3.0), "final")
+                                        solid_base_thickness=3.0, cleanup="off"), "final")
     out = as_trimesh(with_base)
     assert with_base.valid and out.is_watertight and solid_bodies(out) == 1
     assert out.volume - as_trimesh(open_bottom).volume == pytest.approx(50 * 50 * 3.0, rel=0.12)

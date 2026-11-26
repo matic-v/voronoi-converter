@@ -121,7 +121,7 @@ def test_exact_field_matches_the_unsmoothed_mesh(cube, settings: Settings) -> No
 @pytest.mark.parametrize("surface,interior", [("perforated", "struts"), ("rib_lattice", "struts"),
                                               ("embossed", "hollow"), ("none", "struts")])
 def test_smoothing_multiplies_triangles_and_reduces_the_facets(cube, surface: str, interior: str) -> None:
-    base = Settings(surface_style=surface, interior_style=interior)
+    base = Settings(surface_style=surface, interior_style=interior, cleanup="off")
     plain = generate(cube, base, "final")
     smooth1, field = generate_with_field(cube, base.model_copy(update={"smoothness": "smooth"}))
     smooth2 = generate(cube, base.model_copy(update={"smoothness": "extra"}), "final")
@@ -159,7 +159,7 @@ def test_smoothed_struts_are_round(cube) -> None:
 @pytest.mark.parametrize("name", ["cube_50", "sphere_60", "bracket_100"])
 def test_smoothed_result_keeps_the_envelope_and_exports_cleanly(name: str) -> None:
     mesh = load(name)
-    result = generate(mesh, Settings(smoothness="smooth"), "final")
+    result = generate(mesh, Settings(smoothness="smooth", cleanup="off"), "final")
     out = trimesh.load(io.BytesIO(to_binary_stl(result.vertices, result.faces)), file_type="stl")
     assert out.is_watertight and out.is_winding_consistent and out.volume > 0
     envelope = SurfaceIndex(mesh.vertices, mesh.faces, spacing=0.3)
@@ -170,7 +170,7 @@ def test_smoothed_result_keeps_the_envelope_and_exports_cleanly(name: str) -> No
 
 
 def test_smoothing_is_deterministic_and_final_only(cube) -> None:
-    settings = Settings(smoothness="smooth")
+    settings = Settings(smoothness="smooth", cleanup="off")
     first = generate(cube, settings, "final")
     second = generate(cube, settings, "final")
     assert to_binary_stl(first.vertices, first.faces) == to_binary_stl(second.vertices, second.faces)
@@ -199,7 +199,7 @@ def test_smoothness_warning_wording() -> None:
 def test_smoothing_does_not_fold_triangles_over(cube) -> None:
     """Every triangle of the smoothed mesh still faces the way its parent triangle did."""
     from voronoi_engine.smoothing import face_normals
-    settings = Settings(surface_style="rib_lattice")  # sharp-edged ribs: the hard case
+    settings = Settings(surface_style="rib_lattice", cleanup="off")  # sharp-edged ribs: the hard case
     plain = generate(cube, settings, "final")
     smooth1 = generate(cube, settings.model_copy(update={"smoothness": "smooth"}), "final")
     assert len(smooth1.faces) == 4 * len(plain.faces)  # nothing merged: order is parent-wise
@@ -243,7 +243,8 @@ def sphere() -> LoadedMesh:
 
 @pytest.mark.parametrize("surface", ["rib_lattice", "perforated", "embossed"])
 def test_edge_rounding_removes_the_saw_teeth_on_the_skin(sphere, surface: str) -> None:
-    base = Settings(surface_style=surface, interior_style="hollow", smoothness="smooth")
+    base = Settings(surface_style=surface, interior_style="hollow", smoothness="smooth",
+                    cleanup="off")
     sharp = generate(sphere, base.model_copy(update={"edge_rounding": 0.0}), "final")
     rounded = generate(sphere, base, "final")  # default edge rounding 0.5 mm
     assert base.edge_rounding == 0.5
@@ -255,7 +256,7 @@ def test_edge_rounding_removes_the_saw_teeth_on_the_skin(sphere, surface: str) -
 def test_smoothing_without_edge_rounding_makes_no_spikes(sphere) -> None:
     # Pointed hole tops add a sharp point of their own: off here, to measure the guard alone.
     settings = Settings(surface_style="rib_lattice", interior_style="hollow", edge_rounding=0.0,
-                        smoothness="smooth", pointed_holes=False)
+                        smoothness="smooth", pointed_holes=False, cleanup="off")
     result = generate(sphere, settings, "final")
     assert result.valid and spike_count(result) <= 5  # was ~200 before the spike guard
 

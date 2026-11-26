@@ -94,7 +94,8 @@ def test_generate_repairs_its_own_defects_and_says_so(monkeypatch) -> None:
         return vertices, np.delete(faces, 20, axis=0)  # and one missing
 
     monkeypatch.setattr(pipeline, "fit_to_envelope", damaged)
-    result = generate(mesh, Settings(surface_style="solid", interior_style="hollow"), "final")
+    result = generate(mesh, Settings(surface_style="solid", interior_style="hollow", cleanup="off"),
+                      "final")
     assert result.valid and result.problems == []
     assert any("repaired automatically" in w for w in result.warnings)
 

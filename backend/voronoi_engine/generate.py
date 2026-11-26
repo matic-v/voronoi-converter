@@ -279,6 +279,21 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
     )
 
 
+def _snap_to_envelope(vertices: np.ndarray, body) -> np.ndarray:
+    """Simplifying puts a kept point where it best fits the triangles it replaces, which
+    on the part's outer surface can be a few hundredths of a millimetre inside it. Put
+    such points back onto the surface, so the part's dimensions stay exact."""
+    reach = min(0.1, 0.25 * body.grid.h)
+    near = np.nonzero(body.sample(vertices) > -2 * reach)[0]
+    if len(near) == 0:
+        return vertices
+    distance, closest, _ = body.surface.closest(vertices[near], k=8)
+    inside = (distance < 0) & (distance > -reach)
+    vertices = vertices.copy()
+    vertices[near[inside]] = closest[inside]
+    return vertices
+
+
 def _clean_up(vertices, faces, body, strength: str, job: Job, warnings: list[str]):
     """Unfold fins and simplify. The result must pass the same checks as the mesh it
     replaces; if it does not (even after repair, and with less simplification), the fins
@@ -286,12 +301,18 @@ def _clean_up(vertices, faces, body, strength: str, job: Job, warnings: list[str
     even that fails, the mesh is used as it was."""
 
     def acceptable(v, f):
-        v, f = fit_to_envelope(v, f, body, passes=0)  # simplifying may shift a point outward
+        v = _snap_to_envelope(v, body)
+        # Simplifying may shift a point outward, or bridge a concave edge of the part with a
+        # large triangle: the same fit as after meshing splits such triangles at the edge.
+        v, f = fit_to_envelope(v, f, body, passes=2)
         welded_v, welded_f, _ = weld_as_exported(v, f)
         if not validate(welded_v, welded_f):
             return v, f
         fixed_v, fixed_f, repairs = repair(welded_v, welded_f)
-        return (fixed_v, fixed_f) if repairs and not validate(fixed_v, fixed_f) else None
+        if repairs and not validate(fixed_v, fixed_f):
+            warnings.append("Mesh defects were repaired automatically: " + "; ".join(repairs) + ".")
+            return fixed_v, fixed_f
+        return None
 
     # A rare collapse leaves a defect (an edge in three triangles); simplifying a little
     # less moves the collapses and almost always avoids it. Still deterministic.
