@@ -124,3 +124,22 @@ def test_a_patch_left_broken_is_put_back(raw, monkeypatch) -> None:
     out_v, out_f = cleanup_module._simplify_patches(v, f, 1e-4, len(f) // 40, 0.0)
     assert validate(out_v, out_f) == []
     assert len(out_f) < len(f)  # the other patches are still simplified
+
+
+def test_snapping_moves_only_points_from_the_outer_surface() -> None:
+    """A point a little inside the surface goes back onto it only if it came from the
+    surface; the start of a rounded edge (just as close, but never on it) stays."""
+    from voronoi_engine.body_field import BodyField
+    from voronoi_engine.generate import _snap_to_envelope
+    from voronoi_engine.grid import Grid
+
+    cube = test_models.cube()  # 50 mm, centred on the origin
+    lo, hi = cube.bounds[0] - 3.0, cube.bounds[1] + 3.0
+    body = BodyField(np.asarray(cube.vertices), np.asarray(cube.faces), Grid.for_bounds(lo, hi, 1.0))
+    top = cube.bounds[1][2]
+    pulled_in = np.array([[0.0, 0.0, top - 0.03]])  # simplification moved it inward
+    rounding = np.array([[10.0, 0.0, top - 0.03]])  # part of a rounding, never on top
+    before = np.array([[0.2, 0.0, top], [10.0, 0.0, top - 0.03]])
+    out = _snap_to_envelope(np.vstack([pulled_in, rounding]), body, before)
+    np.testing.assert_allclose(out[0], [0.0, 0.0, top], atol=1e-9)
+    np.testing.assert_allclose(out[1], rounding[0])

@@ -20,6 +20,7 @@ from .mesh_io import LoadedMesh
 from .orientation import oriented
 from .meshing import extract_mesh, fit_to_envelope, keep_largest_body, signed_volume
 from .printability import printability_warnings
+from .parallel import kd_workers
 from .progress import Job
 from .cleanup import STRENGTHS, clean_up, unfold_fins
 from .repair import repair, validate, weld_as_exported
@@ -289,18 +290,37 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
     )
 
 
-def _snap_to_envelope(vertices: np.ndarray, body) -> np.ndarray:
+ON_ENVELOPE_MM = 1e-5  # a point this close to the input surface lies on it
+
+
+def _snap_to_envelope(vertices: np.ndarray, body, before: np.ndarray) -> np.ndarray:
     """Simplifying puts a kept point where it best fits the triangles it replaces, which
     on the part's outer surface can be a few hundredths of a millimetre inside it. Put
-    such points back onto the surface, so the part's dimensions stay exact."""
+    such points back onto the surface, so the part's dimensions stay exact.
+
+    Only points that come from the outer surface are moved: their nearest point before
+    clean-up (`before`) was on it. A rounded edge curving away from the surface is also
+    a few hundredths inside near the surface; moving those points flattened the start of
+    every rounding into a jagged ledge."""
+    from scipy.spatial import cKDTree
+
     reach = min(0.1, 0.25 * body.grid.h)
     near = np.nonzero(body.sample(vertices) > -2 * reach)[0]
     if len(near) == 0:
         return vertices
     distance, closest, _ = body.surface.closest(vertices[near], k=8)
     inside = (distance < 0) & (distance > -reach)
+    if not inside.any():
+        return vertices
+    near, closest = near[inside], closest[inside]
+    candidates = np.nonzero(body.sample(before) > -4 * reach)[0]
+    if len(candidates) == 0:
+        return vertices
+    on_surface = body.surface.signed_distance(before[candidates], k=8) > -ON_ENVELOPE_MM
+    _, nearest = cKDTree(before[candidates]).query(vertices[near], k=1, workers=kd_workers())
+    from_surface = on_surface[nearest]
     vertices = vertices.copy()
-    vertices[near[inside]] = closest[inside]
+    vertices[near[from_surface]] = closest[from_surface]
     return vertices
 
 
@@ -311,7 +331,7 @@ def _clean_up(vertices, faces, body, strength: str, job: Job, warnings: list[str
     even that fails, the mesh is used as it was."""
 
     def acceptable(v, f):
-        v = _snap_to_envelope(v, body)
+        v = _snap_to_envelope(v, body, vertices)
         # Simplifying may shift a point outward, or bridge a concave edge of the part with a
         # large triangle: the same fit as after meshing splits such triangles at the edge.
         v, f = fit_to_envelope(v, f, body, passes=2)
