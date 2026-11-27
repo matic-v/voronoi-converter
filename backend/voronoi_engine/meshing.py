@@ -111,7 +111,62 @@ def fit_to_envelope(vertices: np.ndarray, faces: np.ndarray, body: BodyField,
         vertices = np.vstack([vertices, new_points])
         normal = np.vstack([normal, new_normal])
         near = np.concatenate([near, np.ones(len(new_points), dtype=bool)])
+    # Where a split was not added because the crease point is already a vertex, the
+    # edge across the corner is flipped to run to that vertex instead.
+    faces = _flip_bridging_edges(vertices, faces, near, surface, tolerance)
     return vertices, faces
+
+
+def _flip_bridging_edges(vertices, faces, near, surface, tolerance, rounds: int = 3):
+    """Flip edges whose middle is outside the surface (by more than `tolerance`) when the
+    other diagonal of their two triangles stays inside and the flip turns no triangle
+    over. Each triangle takes part in at most one flip per round."""
+    from .smoothing import face_normals
+
+    for _ in range(rounds):
+        n = np.int64(len(vertices))
+        a, b = faces.ravel(), faces[:, [1, 2, 0]].ravel()
+        opposite = faces[:, [2, 0, 1]].ravel()
+        owner = np.repeat(np.arange(len(faces)), 3)
+        candidate = np.nonzero(near[a] & near[b] & (a < b))[0]
+        if len(candidate) == 0:
+            break
+        middle = 0.5 * (vertices[a[candidate]] + vertices[b[candidate]])
+        out = candidate[surface.signed_distance(middle, k=8) > tolerance]
+        if len(out) == 0:
+            break
+        # The twin half-edge (b -> a) of each outside edge.
+        directed = a * n + b
+        order = np.argsort(directed)
+        twin_key = b[out] * n + a[out]
+        found = np.minimum(np.searchsorted(directed[order], twin_key), len(order) - 1)
+        has_twin = directed[order][found] == twin_key
+        out, twin = out[has_twin], order[found][has_twin]
+        c, d = opposite[out], opposite[twin]
+        f1, f2 = owner[out], owner[twin]
+        # The new diagonal must stay inside and must not exist yet.
+        inside = surface.signed_distance(0.5 * (vertices[c] + vertices[d]), k=8) <= tolerance
+        existing = np.isin(np.minimum(c, d) * n + np.maximum(c, d),
+                           np.minimum(a, b) * n + np.maximum(a, b))
+        new1 = np.column_stack([c, d, b[out]])
+        new2 = np.column_stack([d, c, a[out]])
+        before = face_normals(vertices, faces[f1]) + face_normals(vertices, faces[f2])
+        keeps_side = (np.einsum("ij,ij->i", face_normals(vertices, new1), before) > 0) & \
+                     (np.einsum("ij,ij->i", face_normals(vertices, new2), before) > 0)
+        ok = np.nonzero(inside & ~existing & keeps_side & (c != d))[0]
+        used = np.zeros(len(faces), dtype=bool)
+        chosen = []
+        for i in ok:  # few edges; a triangle in two flips at once would break the mesh
+            if not used[f1[i]] and not used[f2[i]]:
+                used[f1[i]] = used[f2[i]] = True
+                chosen.append(i)
+        if not chosen:
+            break
+        chosen = np.array(chosen)
+        faces = faces.copy()
+        faces[f1[chosen]] = new1[chosen]
+        faces[f2[chosen]] = new2[chosen]
+    return faces
 
 
 def _new_and_apart(points: np.ndarray, existing: np.ndarray, distance: float) -> np.ndarray:
