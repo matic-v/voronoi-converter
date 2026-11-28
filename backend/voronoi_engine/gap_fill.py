@@ -6,8 +6,8 @@ than about two voxels. The grid cannot draw such a slot: it comes out as a torn,
 seam that no smoothing can repair. The slot is closed instead.
 
 On the final grid, the material (field < 0) is closed morphologically with a radius of
-one voxel; the nodes that closing adds are the narrow gaps. Their indicator, widened by
-a voxel, is blurred into a smooth field `g` (0 away from gaps, 1 at full strength) and the material field becomes
+one voxel; the nodes that closing adds are the narrow gaps. Their indicator is blurred
+into a smooth field `g` (0 away from gaps) and the material field becomes
 `field - STRENGTH_VOXELS * h * g`, which fills the gap and rounds into the material
 beside it. `g` is stored on the grid and interpolated, so the voxel construction and
 the exact field (smoothing) use the same values.
@@ -35,11 +35,7 @@ def narrow_gaps(field: np.ndarray, inside: np.ndarray) -> np.ndarray | None:
     gap = closed & ~material & inside
     if not gap.any():
         return None
-    # Widened by a voxel before blurring: a short gap (small in every direction) would
-    # otherwise blur to too little to close, and a closed slot would leave a thin neck.
-    gap = ndimage.binary_dilation(gap, structure=structure) & inside
-    return np.minimum(ndimage.gaussian_filter(gap.astype(np.float32), BLUR_VOXELS, mode="constant")
-                      * 2.0, 1.0)
+    return ndimage.gaussian_filter(gap.astype(np.float32), BLUR_VOXELS, mode="constant")
 
 
 def apply(field: np.ndarray, gaps: np.ndarray | None, h: float) -> np.ndarray:
