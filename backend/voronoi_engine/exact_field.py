@@ -17,6 +17,7 @@ from .edge_members import (edge_rounding_range, member_depth, member_field, memb
 from .grading import Grading
 from .settings import Settings
 from .strut_field import StrutEvaluator, smooth_max, smooth_min
+from .thin_core import sample_extra
 from .surface_pattern import SurfacePattern, pointed_tops
 
 HOLE_ROUNDING = 0.3
@@ -35,6 +36,7 @@ class ExactField:
     exact_depth: float = 0.0  # use the exact distance to the input down to this depth
     keep: StrutEvaluator | None = None  # distance to the kept edges
     keep_rounding: float = 0.0
+    extra: np.ndarray | None = None  # extra skin depth in thin walls (thin_core)
 
     def __call__(self, points: np.ndarray) -> np.ndarray:
         s, body, h = self.settings, self.body, self.body.grid.h
@@ -55,13 +57,14 @@ class ExactField:
             nominal = s.rib_width if surface == "rib_lattice" else s.shell_thickness
             depth = nominal * scale
             if not (surface == "solid" and interior == "solid"):
-                shell = np.maximum(d, -(d + depth))
+                skin_depth = depth + sample_extra(self.extra, body.grid, points)
+                shell = np.maximum(d, -(d + skin_depth))
                 skin = shell
                 if surface != "solid":
-                    rounding = s.edge_rounding
+                    rounding = edge_rounding_range(s, h)[0]
                     in_skin = self.keep is not None and member_in_skin(surface)
                     widest = edge_rounding_range(s, h)[1] if in_skin else rounding
-                    band = (d > -(depth + 2 * h + widest)) & (d < 2 * h)
+                    band = (d > -(skin_depth + 2 * h + widest)) & (d < 2 * h)
                     band_rounding = rounding  # a number, or one radius per band point
                     wall = np.zeros(len(points))
                     if band.any():
@@ -94,7 +97,7 @@ class ExactField:
                                 to_edge[close] = np.minimum(self.keep(p[close]), reach)
                             band_rounding = rounding_near_edges(to_edge, s, h)
                             wall[band] = with_kept_edges(wall[band], d[band], to_edge, s,
-                                                         depth[band] if np.ndim(depth) else depth,
+                                                         skin_depth[band] if np.ndim(skin_depth) else skin_depth,
                                                          reach, band_rounding)
                     if surface == "embossed":
                         wall[band] = smooth_min(wall[band], d[band] + s.emboss_depth, band_rounding)
@@ -106,9 +109,10 @@ class ExactField:
                 solid = d.copy()
             else:
                 solid = np.minimum(skin, d + depth)
-                band = (d > -(depth + 2 * h + s.edge_rounding)) & (d < 2 * h)
+                rounding = edge_rounding_range(s, h)[0]
+                band = (d > -(depth + 2 * h + rounding)) & (d < 2 * h)
                 core = d[band] + (depth[band] if np.ndim(depth) else depth)
-                solid[band] = smooth_min(skin[band], core, s.edge_rounding)
+                solid[band] = smooth_min(skin[band], core, rounding)
         elif interior == "struts":
             solid = np.full(len(points), self.strut_margin)
             if self.struts is not None:

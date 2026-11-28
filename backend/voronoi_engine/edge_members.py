@@ -60,26 +60,21 @@ MIN_ROUNDING_VOXELS = 2.0  # a rounding radius the voxel grid can draw without t
 
 
 def edge_rounding_range(settings, h: float) -> tuple[float, float]:
-    """(rounding set, rounding next to kept edges). Along a kept edge the member's edges
-    and the grooves beside it run the whole length of the edge; with a radius under about
-    two voxels the grid draws them as a saw-tooth row of shards, so there the radius is
-    at least two voxels. A rounding of 0 (sharp) is left as set."""
+    """(rounding used everywhere, rounding next to kept edges). With a radius under about
+    two voxels the grid draws rounded edges (rib edges, hole rims, the grooves beside kept
+    edges) as a saw-tooth row of shards, so the radius used is at least two voxels. A
+    rounding of 0 (sharp) is left as set. Both values are the same since the minimum
+    applies everywhere; the pair is kept for the callers that size margins."""
     rounding = settings.edge_rounding
-    if rounding <= 0 or not settings.keep_edges:
+    if rounding <= 0:
         return rounding, rounding
-    return rounding, max(rounding, MIN_ROUNDING_VOXELS * h)
+    used = max(rounding, MIN_ROUNDING_VOXELS * h)
+    return used, used
 
 
 def rounding_near_edges(to_edge: np.ndarray, settings, h: float):
-    """Rounding radius per point: the larger radius on and next to the kept-edge members,
-    going smoothly back to the radius set over two of those radii further out."""
-    rounding, near = edge_rounding_range(settings, h)
-    if near == rounding:
-        return rounding
-    inner = 0.5 * settings.keep_width + member_depth(settings)
-    t = np.clip((np.asarray(to_edge, np.float64) - inner) / (2.0 * near), 0.0, 1.0)
-    smooth = t * t * (3.0 - 2.0 * t)
-    return near + (rounding - near) * smooth
+    """Rounding radius next to kept edges: the same as everywhere (edge_rounding_range)."""
+    return edge_rounding_range(settings, h)[1]
 
 
 def member_in_skin(surface_style: str) -> bool:

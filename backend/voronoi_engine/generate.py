@@ -31,6 +31,7 @@ from .settings import SMOOTHING_LEVELS, Settings
 from .smoothing import MAX_TRIANGLES, allowed_levels, max_triangles, smooth
 from .skin_attach import attach_edges_to_skin
 from .supports import make_self_supporting
+from .thin_core import FILL_VOXELS, extra_depth
 from .strut_field import make_evaluator, smooth_max, smooth_min, strut_field, strut_margin
 from .surface_pattern import (SurfacePattern, pointed_tops, prepare_pointed_tops,
                               surface_seeds)
@@ -118,10 +119,11 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
 
     # Skin. Its depth is the shell thickness (the rib width for B), times the grading.
     skin, pattern, evaluator, skin_depth, band = None, None, None, np.float32(0.0), None
+    extra = None  # extra skin depth where the skins of a thin wall nearly meet (thin_core)
     # Edges of a patterned skin (rib edges, hole rims, recess edges) are rounded.
-    rounding = settings.edge_rounding if surface in ("perforated", "rib_lattice", "embossed") else 0.0
-    # Next to kept edges the rounding may be larger (edge_rounding_range): room for it.
-    rounding_wide = edge_rounding_range(settings, h)[1] if rounding > 0 else rounding
+    # At least two voxels (edge_rounding_range): smaller roundings come out saw-toothed.
+    rounding = edge_rounding_range(settings, h)[0] if surface in ("perforated", "rib_lattice", "embossed") else 0.0
+    rounding_wide = rounding
     # Kept edges: distance to them on the grid. With a patterned skin the skin draws them
     # (they are walls of its pattern); otherwise they are added after the interior.
     keep_edges, to_edges, keep_reach = None, None, 0.0
@@ -143,8 +145,12 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
         thickness_scale = grading.thickness_scale_on_grid(grid, d)
         skin_depth = np.float32(nominal) * thickness_scale
         if not (surface == "solid" and interior == "solid"):
-            body.ensure_depth(nominal * thickest + blend + 2 * h + rounding_wide)
-            skin, pattern, band = _skin_field(surface, settings, body, skin_depth, thickness_scale, grading,
+            body.ensure_depth(nominal * thickest + blend + 2 * h + rounding_wide + FILL_VOXELS * h)
+            if interior != "solid":  # close gaps between the skins of thin walls
+                extra = extra_depth(body, skin_depth, rounding_wide + 2 * h)
+            skin, pattern, band = _skin_field(surface, settings, body,
+                                              skin_depth if extra is None else skin_depth + extra,
+                                              thickness_scale, grading,
                                cell_range, job.sub(0.35, 0.42),
                                to_edges if member_in_skin(surface) else None, keep_reach)
     if member_in_skin(surface):
@@ -262,8 +268,9 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
         exact = ExactField(
             settings, body, grading, pattern, evaluator, strut_margin(blend, h),
             lo[2] + settings.solid_base_thickness if settings.solid_base_thickness > 0 else None,
-            exact_depth=(nominal * thickest + 2 * h + rounding_wide) if surface != "none" else 0.0,
-            keep=keep_edges, keep_rounding=rounding)
+            exact_depth=(nominal * thickest + 2 * h + rounding_wide + FILL_VOXELS * h)
+            if surface != "none" else 0.0,
+            keep=keep_edges, keep_rounding=rounding, extra=extra)
         vertices, faces = smooth(vertices, faces, exact, levels, h, job.sub(0.85, 0.95))
         # Whatever the projection did, nothing may end outside the original envelope.
         vertices, faces = fit_to_envelope(vertices, faces, body, passes=0)
@@ -439,7 +446,7 @@ def _skin_field(surface: str, settings: Settings, body: BodyField, depth, thickn
         return shell, None, None
 
     cell = settings.surface_cell_size
-    rounding = settings.edge_rounding
+    rounding = edge_rounding_range(settings, h)[0]
     rng = np.random.default_rng([settings.random_seed, SURFACE_STREAM])
     seeds = surface_seeds(body.surface.tri, cell, rng,
                           scale=grading.cell_scale if grading.cells else None,
