@@ -194,7 +194,16 @@ def _drop(p: np.ndarray, body: BodyField, skin_depth: float | None, radius: floa
     stop = leaves[0] if len(leaves) else len(column)  # the part ends there
     if skin_depth is not None:
         if skin_value is not None:
-            solid = np.flatnonzero(skin_value(column[:stop]) < -0.25 * h)
+            value = skin_value(column[:stop])
+            solid = value < -0.25 * h
+            first = 0
+            if skin_value(p[None, :])[0] < 0.0:
+                # p is in skin material that does not hold it (a ceiling): the strut has to
+                # leave that skin before skin material below can carry it.
+                out = np.flatnonzero(value >= 0.0)
+                first = out[0] if len(out) else len(solid)
+                solid[:first] = False
+            solid = np.flatnonzero(solid)
         else:
             solid = np.flatnonzero(depth[:stop] < 0.5 * skin_depth)
         if len(solid):
@@ -203,6 +212,7 @@ def _drop(p: np.ndarray, body: BodyField, skin_depth: float | None, radius: floa
             # The column only meets a hole or a gap between ribs: lean over to the
             # nearest skin material in the floor below, no flatter than 45 degrees.
             floor = np.flatnonzero(depth[:stop] < 0.5 * skin_depth)
+            floor = floor[floor >= first]
             if len(floor):
                 target = _lean_to_skin(p, column[floor[0]], skin_value, h)
                 if target is not None:

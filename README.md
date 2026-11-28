@@ -98,9 +98,10 @@ Options: `--port 8080`, `--no-browser`, `--test` (run the test suite instead of 
 - **Edge rounding** (styles A, B, C, default 0.5 mm): rounds the edges of the skin pattern (rib
   edges, hole rims, recess edges) with this radius. Combined with Smoothness it removes the
   saw-tooth look of the skin. The edges of your original part stay sharp, so its dimensions do
-  not change. Set 0 for edges as sharp as the voxel grid allows. The rounding used is at least
-  2 voxels (for example 1.7 mm with Fine on a 160 mm part): a smaller rounding comes out as rows of
-  thin, saw-toothed triangles. The same minimum applies to the Blend radius.
+  not change. Set 0 for edges as sharp as the voxel grid allows. In the final the rounding used is
+  at least 2 voxels (for example 1.7 mm with Fine on a 160 mm part): a smaller rounding comes out as rows of
+  thin, saw-toothed triangles. The same minimum applies to the Blend radius. The preview uses
+  both as set (on its coarse grid the minimum would turn every joint into a blob).
 - **Thin walls** (automatic): where the part is barely thicker than the skin on both sides, the
   skins of the two sides would leave a gap in the middle too narrow for the voxel grid (it comes
   out as a torn, ragged rim). Gaps up to 2 voxels on each side of the middle are closed (the
