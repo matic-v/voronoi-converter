@@ -40,8 +40,8 @@ def test_unfolding_only_straightens(raw) -> None:
     v, f = raw
     before = count_fins(v, f, 120)
     after_v = unfold_fins(v, f, 120)
-    assert before > 20  # the raw mesh has fins to remove
-    assert count_fins(after_v, f, 120) < 0.2 * before
+    assert before > 10  # the raw mesh has fins to remove (fewer since rounded inner faces)
+    assert count_fins(after_v, f, 120) < 0.25 * before
     assert count_fins(after_v, f, 150) <= count_fins(v, f, 150)
     assert not validate(after_v, f)
 

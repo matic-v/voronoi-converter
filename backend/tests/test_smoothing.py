@@ -140,8 +140,9 @@ def test_smoothing_multiplies_triangles_and_reduces_the_facets(cube, surface: st
 
 
 def test_smoothed_struts_are_round(cube) -> None:
-    """Without a skin and without blending, every surface point away from the joints
-    and the cut ends is exactly one strut radius from a strut axis."""
+    """Without a skin and without blending, every surface point away from the cut ends
+    lies on the exact shape: one strut radius from a strut axis, or on the small filler
+    in the narrow wedges where struts meet (gap_fill)."""
     settings = Settings(surface_style="none", interior_style="struts", blend_radius=0.0)
     plain, field = generate_with_field(cube, settings.model_copy(update={"smoothness": "smooth"}))
     rough = generate(cube, settings, "final")
@@ -150,7 +151,7 @@ def test_smoothed_struts_are_round(cube) -> None:
     def radius_error(result) -> float:
         inside = -index.signed_distance(result.vertices) > 1.5  # away from the cut ends
         points = result.vertices[inside][::7]
-        return float(np.quantile(np.abs(field.struts(points)), 0.9))
+        return float(np.quantile(np.abs(field(points)), 0.9))
 
     assert radius_error(plain) < 0.25 * radius_error(rough)
     assert radius_error(plain) < 0.01

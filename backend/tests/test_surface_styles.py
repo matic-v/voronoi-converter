@@ -146,7 +146,9 @@ def test_rib_lattice_is_only_ribs_at_the_surface(meshes) -> None:
     result = generate(mesh, Settings(surface_style="rib_lattice", interior_style="hollow"), "final")
     index = SurfaceIndex(mesh.vertices, mesh.faces, spacing=0.5)
     depth = -index.signed_distance(result.vertices, k=8)
-    assert depth.max() <= 2.0 + result.voxel_mm  # rib depth = rib width
+    # Rib depth = rib width; the inner corner along the cube's edges is rounded (blurred
+    # inner face), which reaches about a voxel deeper there.
+    assert depth.max() <= 2.0 + 1.5 * result.voxel_mm
     ribs2 = as_trimesh(result).volume
     ribs4 = volume(mesh, "final", surface_style="rib_lattice", interior_style="hollow", rib_width=4.0)
     bigger_cells = volume(mesh, "final", surface_style="rib_lattice", interior_style="hollow",
