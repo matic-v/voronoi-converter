@@ -22,6 +22,9 @@ NEAR_BAND_VOXELS = 3.5
 MAX_SURFACE_SAMPLES = 40_000_000
 
 
+
+INNER_BLUR_VOXELS = 1.5  # Gaussian sigma of the blurred field for inner faces
+
 class BodyField:
     def __init__(self, vertices: np.ndarray, faces: np.ndarray, grid: Grid, job: Job | None = None):
         job = job or Job()
@@ -81,6 +84,24 @@ class BodyField:
             self.sdf[index] = -distance.astype(np.float32)
             self._refined |= todo
         self.depth = depth
+
+    @property
+    def inner(self) -> np.ndarray:
+        """The field blurred by INNER_BLUR_VOXELS: for faces inside the part (the skin's
+        inner face, how deep a point is below the surface). The exact distance folds
+        sharply wherever the nearest face changes (along every convex edge, in the middle
+        of a thin wall); faces built on it end in creases the voxel grid cannot draw,
+        and whatever meets them (openings, edge strips) comes out ragged. The blur rounds
+        those folds. The part's own surface keeps the exact distance."""
+        if getattr(self, "_inner", None) is None or self._inner_depth != self.depth:
+            self._inner = ndimage.gaussian_filter(self.sdf, INNER_BLUR_VOXELS, mode="nearest")
+            self._inner_depth = self.depth
+        return self._inner
+
+    def sample_inner(self, points: np.ndarray) -> np.ndarray:
+        """Trilinear interpolation of `inner` at world points."""
+        return ndimage.map_coordinates(
+            self.inner, self.grid.to_index(points).T, order=1, mode="nearest")
 
     def sample(self, points: np.ndarray) -> np.ndarray:
         """Trilinear interpolation of the field at world points."""

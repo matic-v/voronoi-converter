@@ -164,9 +164,10 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
         if skin is None or surface == "solid":
             solid = d.copy()
         else:  # patterned skin on a solid core that starts below the skin
-            solid = np.minimum(skin, d + skin_depth)
+            inner = body.inner  # faces inside the part: blurred distance (BodyField.inner)
+            solid = np.minimum(skin, inner + skin_depth)
             if rounding > 0 and band is not None:  # round the bottoms of the pockets
-                core = d[band] + (skin_depth[band] if np.ndim(skin_depth) == 3 else skin_depth)
+                core = inner[band] + (skin_depth[band] if np.ndim(skin_depth) == 3 else skin_depth)
                 solid[band] = smooth_min(skin[band], core, rounding)
     elif interior == "struts":
         job.report(0.42, "Placing struts")
@@ -220,12 +221,14 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
         if surface in ("perforated", "rib_lattice"):
             # An open skin would let strut ends poke out through its holes: stop the
             # struts half-way into the skin, where they still merge with its material.
-            solid = np.maximum(solid, d + np.float32(0.5) * skin_depth)
+            # The cut is rounded like a strut joint: a sharp cut shows in the openings.
+            solid = smooth_max(solid, body.inner + np.float32(0.5) * skin_depth, blend)
         elif surface == "embossed":
             # End the struts half-way between the recess floor and the shell's inner face:
             # inside the floor material, so their blend never shows on the floor.
             emboss = np.float32(settings.emboss_depth)
-            solid = np.maximum(solid, d + emboss + np.float32(0.5) * (skin_depth - emboss))
+            solid = smooth_max(solid, body.inner + emboss + np.float32(0.5) * (skin_depth - emboss),
+                               blend)
         if skin is not None:  # struts merge into the skin with the same fillet as strut joints
             solid = smooth_min(skin, solid, blend)
     elif skin is not None:
@@ -450,7 +453,10 @@ def _skin_field(surface: str, settings: Settings, body: BodyField, depth, thickn
     kept edges on the grid) the kept edges are drawn as walls of the pattern.
     """
     d, grid, h = body.sdf, body.grid, body.grid.h
-    shell = np.maximum(d, -(d + depth))  # between the surface and its inward offset
+    # Between the surface and its inward offset. The offset uses the blurred distance
+    # (BodyField.inner), so it has no sharp folds where the nearest face changes.
+    inner = body.inner
+    shell = np.maximum(d, -(inner + depth))
     if surface == "solid":
         return shell, None, None
 
@@ -502,7 +508,7 @@ def _skin_field(surface: str, settings: Settings, body: BodyField, depth, thickn
     if to_edges is not None:
         # Next to kept edges the rounding is at least two voxels (edge_rounding_range).
         rounding = rounding_near_edges(to_edges[band], settings, min_h)
-        wall = with_kept_edges(wall, d[band], to_edges[band], settings, at(
+        wall = with_kept_edges(wall, inner[band], to_edges[band], settings, at(
             np.broadcast_to(depth, grid.shape) if np.ndim(depth) else depth), keep_reach, rounding,
             blend_used(settings, min_h))
     if surface == "embossed":

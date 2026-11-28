@@ -58,7 +58,8 @@ class ExactField:
             depth = nominal * scale
             if not (surface == "solid" and interior == "solid"):
                 skin_depth = depth + sample_extra(self.extra, body.grid, points)
-                shell = np.maximum(d, -(d + skin_depth))
+                inner = body.sample_inner(points)  # as in generate: blurred, for inner faces
+                shell = np.maximum(d, -(inner + skin_depth))
                 skin = shell
                 if surface != "solid":
                     rounding = edge_rounding_range(s, h)[0]
@@ -96,7 +97,7 @@ class ExactField:
                             if close.any():
                                 to_edge[close] = np.minimum(self.keep(p[close]), reach)
                             band_rounding = rounding_near_edges(to_edge, s, h)
-                            wall[band] = with_kept_edges(wall[band], d[band], to_edge, s,
+                            wall[band] = with_kept_edges(wall[band], inner[band], to_edge, s,
                                                          skin_depth[band] if np.ndim(skin_depth) else skin_depth,
                                                          reach, band_rounding, blend)
                     if surface == "embossed":
@@ -108,10 +109,11 @@ class ExactField:
             if skin is None or surface == "solid":
                 solid = d.copy()
             else:
-                solid = np.minimum(skin, d + depth)
+                inner = body.sample_inner(points)
+                solid = np.minimum(skin, inner + depth)
                 rounding = edge_rounding_range(s, h)[0]
                 band = (d > -(depth + 2 * h + rounding)) & (d < 2 * h)
-                core = d[band] + (depth[band] if np.ndim(depth) else depth)
+                core = inner[band] + (depth[band] if np.ndim(depth) else depth)
                 solid[band] = smooth_min(skin[band], core, rounding)
         elif interior == "struts":
             solid = np.full(len(points), self.strut_margin)
@@ -120,9 +122,10 @@ class ExactField:
                 if close.any():
                     solid[close] = np.minimum(self.struts(points[close]), self.strut_margin)
             if surface in ("perforated", "rib_lattice"):
-                solid = np.maximum(solid, d + 0.5 * depth)
+                solid = smooth_max(solid, body.sample_inner(points) + 0.5 * depth, blend)
             elif surface == "embossed":
-                solid = np.maximum(solid, d + s.emboss_depth + 0.5 * (depth - s.emboss_depth))
+                solid = smooth_max(solid, body.sample_inner(points) + s.emboss_depth
+                                   + 0.5 * (depth - s.emboss_depth), blend)
             if skin is not None:
                 solid = smooth_min(skin, solid, blend)
         else:
