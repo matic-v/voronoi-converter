@@ -17,6 +17,7 @@ from .edge_members import (blend_used, edge_rounding_range, member_depth, member
 from .grading import Grading
 from .settings import Settings
 from .strut_field import StrutEvaluator, smooth_max, smooth_min
+from . import gap_fill
 from .thin_core import sample_extra
 from .surface_pattern import SurfacePattern, pointed_tops
 
@@ -37,6 +38,7 @@ class ExactField:
     keep: StrutEvaluator | None = None  # distance to the kept edges
     keep_rounding: float = 0.0
     extra: np.ndarray | None = None  # extra skin depth in thin walls (thin_core)
+    gaps: np.ndarray | None = None  # narrow gaps to fill (gap_fill)
 
     def __call__(self, points: np.ndarray) -> np.ndarray:
         s, body, h = self.settings, self.body, self.body.grid.h
@@ -145,4 +147,6 @@ class ExactField:
 
         if self.base_top is not None:
             solid = np.minimum(solid, points[:, 2] - self.base_top)
+        if self.gaps is not None:
+            solid = gap_fill.apply(solid, gap_fill.sample(self.gaps, body.grid, points), h)
         return np.maximum(solid, d)

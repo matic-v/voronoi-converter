@@ -31,6 +31,7 @@ from .settings import SMOOTHING_LEVELS, Settings
 from .smoothing import MAX_TRIANGLES, allowed_levels, max_triangles, smooth
 from .skin_attach import attach_edges_to_skin
 from .supports import make_self_supporting
+from . import gap_fill
 from .thin_core import FILL_VOXELS, extra_depth, sample_extra
 from .strut_field import make_evaluator, smooth_max, smooth_min, strut_field, strut_margin
 from .surface_pattern import (SurfacePattern, pointed_tops, prepare_pointed_tops,
@@ -256,6 +257,9 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
         z = grid.origin[2] + np.arange(grid.shape[2]) * h
         base = (z - (lo[2] + settings.solid_base_thickness)).astype(np.float32)
         solid = np.minimum(solid, base.reshape(1, 1, -1))
+    # Final: close gaps in the material narrower than the grid can draw (gap_fill).
+    gaps = gap_fill.narrow_gaps(solid, d < 0) if mode == "final" else None
+    solid = gap_fill.apply(solid, gaps, h)
     solid = np.maximum(solid, d)  # never outside the original envelope
 
     job.report(0.72, "Removing loose fragments")
@@ -281,7 +285,7 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
             lo[2] + settings.solid_base_thickness if settings.solid_base_thickness > 0 else None,
             exact_depth=(nominal * thickest + 2 * h + rounding_wide + FILL_VOXELS * h)
             if surface != "none" else 0.0,
-            keep=keep_edges, keep_rounding=rounding, extra=extra)
+            keep=keep_edges, keep_rounding=rounding, extra=extra, gaps=gaps)
         vertices, faces = smooth(vertices, faces, exact, levels, h, job.sub(0.85, 0.95))
         # Whatever the projection did, nothing may end outside the original envelope.
         vertices, faces = fit_to_envelope(vertices, faces, body, passes=0)
