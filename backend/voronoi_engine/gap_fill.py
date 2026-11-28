@@ -53,6 +53,9 @@ def narrow_gaps(field: np.ndarray, inside: np.ndarray) -> np.ndarray | None:
     for direction in DIRECTIONS:
         gap |= ndimage.binary_closing(padded, structure=_segment(direction, r))[inner]
     gap &= ~material & inside
+    # Only nodes that share a face with material: a gap seen only across a diagonal can
+    # make a filler speck that touches nothing (a loose fragment).
+    gap &= ndimage.binary_dilation(material)
     if not gap.any():
         return None
     return ndimage.gaussian_filter(gap.astype(np.float32), BLUR_VOXELS, mode="constant")
