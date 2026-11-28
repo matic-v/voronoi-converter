@@ -24,14 +24,14 @@ from .parallel import kd_workers
 from .progress import Job
 from .cleanup import STRENGTHS, clean_up, unfold_fins
 from .repair import repair, validate, weld_as_exported
-from .edge_members import (edge_rounding_range, member_depth, member_field, member_in_skin,
+from .edge_members import (blend_used, edge_rounding_range, member_depth, member_field, member_in_skin,
                            member_lateral, member_reach, rounding_near_edges)
 from .exact_field import ExactField
 from .settings import SMOOTHING_LEVELS, Settings
 from .smoothing import MAX_TRIANGLES, allowed_levels, max_triangles, smooth
 from .skin_attach import attach_edges_to_skin
 from .supports import make_self_supporting
-from .thin_core import FILL_VOXELS, extra_depth
+from .thin_core import FILL_VOXELS, extra_depth, sample_extra
 from .strut_field import make_evaluator, smooth_max, smooth_min, strut_field, strut_margin
 from .surface_pattern import (SurfacePattern, pointed_tops, prepare_pointed_tops,
                               surface_seeds)
@@ -111,7 +111,7 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
     d = body.sdf
 
     job.report(0.35, "Building the skin")
-    blend = settings.blend_radius
+    blend = blend_used(settings, h)  # at least two voxels
     grading = Grading(settings, lo, hi, body)
     _, thickest = scale_range(settings, "thickness")
     cell_range = scale_range(settings, "cell_size")
@@ -414,7 +414,7 @@ def _resolution_warnings(resolution: Resolution, mode: Mode) -> list[str]:
 
 
 def with_kept_edges(wall: np.ndarray, d: np.ndarray, to_edge: np.ndarray, settings: Settings,
-                    depth, reach: float, rounding) -> np.ndarray:
+                    depth, reach: float, rounding, blend: float) -> np.ndarray:
     """Pattern walls plus the kept-edge members, joined with the blend radius like rib
     joints. `rounding` is a number or one radius per point (rounding_near_edges). Shared
     by the voxel grid and the exact field."""
@@ -426,7 +426,7 @@ def with_kept_edges(wall: np.ndarray, d: np.ndarray, to_edge: np.ndarray, settin
     rounding_close = rounding[close] if np.ndim(rounding) else rounding
     lateral = member_lateral(np.asarray(d[close], np.float64), np.asarray(to_edge[close], np.float64),
                              settings.keep_width, depth_close, rounding_close)
-    wall[close] = smooth_min(wall[close], lateral.astype(wall.dtype), settings.blend_radius)
+    wall[close] = smooth_min(wall[close], lateral.astype(wall.dtype), blend)
     return wall
 
 
@@ -485,7 +485,7 @@ def _skin_field(surface: str, settings: Settings, body: BodyField, depth, thickn
                                                    if np.ndim(thickness_scale) else thickness_scale)
         if surface == "rib_lattice":
             # Ribs: within half a rib width of a cell wall; the blend radius fillets rib joints.
-            wall = pattern.wall_distance(points, settings.blend_radius) - half_width
+            wall = pattern.wall_distance(points, blend_used(settings, h)) - half_width
         else:
             # Embossed: closed shell; cell interiors are recessed from the outside, and
             # the corner between recess floor and rib side is filleted.
@@ -494,7 +494,8 @@ def _skin_field(surface: str, settings: Settings, body: BodyField, depth, thickn
         # Next to kept edges the rounding is at least two voxels (edge_rounding_range).
         rounding = rounding_near_edges(to_edges[band], settings, h)
         wall = with_kept_edges(wall, d[band], to_edges[band], settings, at(
-            np.broadcast_to(depth, grid.shape) if np.ndim(depth) else depth), keep_reach, rounding)
+            np.broadcast_to(depth, grid.shape) if np.ndim(depth) else depth), keep_reach, rounding,
+            blend_used(settings, h))
     if surface == "embossed":
         wall = smooth_min(wall, d[band] + np.float32(settings.emboss_depth), rounding)
     # Shell minus holes / cells: the edges where they meet are rounded.

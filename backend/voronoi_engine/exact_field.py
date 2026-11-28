@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .body_field import BodyField
-from .edge_members import (edge_rounding_range, member_depth, member_field, member_in_skin,
+from .edge_members import (blend_used, edge_rounding_range, member_depth, member_field, member_in_skin,
                            member_reach, rounding_near_edges)
 from .grading import Grading
 from .settings import Settings
@@ -41,7 +41,7 @@ class ExactField:
     def __call__(self, points: np.ndarray) -> np.ndarray:
         s, body, h = self.settings, self.body, self.body.grid.h
         surface, interior = s.surface_style, s.interior_style
-        blend = s.blend_radius
+        blend = blend_used(s, h)  # as in generate
 
         # Distance to the input surface: exact near it and through the skin (so the
         # skin's inner face is smoothed too), from the grid further in.
@@ -98,7 +98,7 @@ class ExactField:
                             band_rounding = rounding_near_edges(to_edge, s, h)
                             wall[band] = with_kept_edges(wall[band], d[band], to_edge, s,
                                                          skin_depth[band] if np.ndim(skin_depth) else skin_depth,
-                                                         reach, band_rounding)
+                                                         reach, band_rounding, blend)
                     if surface == "embossed":
                         wall[band] = smooth_min(wall[band], d[band] + s.emboss_depth, band_rounding)
                     skin = shell.copy()

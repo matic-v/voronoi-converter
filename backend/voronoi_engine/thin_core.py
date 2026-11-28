@@ -10,10 +10,10 @@ made deeper until it meets the skin of the other side.
 For each grid node near the skin's inner face, the material is followed inward (against
 the gradient of the distance field) to find how far the part continues: `H`, the
 largest depth along that path, is half the local wall thickness. With a gap of
-`gap = H - depth` on each side of the middle, the skin is made deeper by
-`clip(2 voxels - gap, 0, 2 voxels)`. A gap under one voxel closes completely; between
-one and two voxels it narrows to a wedge, so the closed and open parts meet without a
-step. The extra depth is stored on the grid and interpolated, so the voxel construction
+`gap = H - depth` on each side of the middle, gaps up to 2 voxels are closed (the skins
+overlap by a voxel), gaps from 2.5 voxels on are left, and in between the gap opens
+steeply, so the closed and open parts meet without a step and the thin tip of the
+closing gap is as short as possible. The extra depth is stored on the grid and interpolated, so the voxel construction
 and the exact field (smoothing) use the same values.
 """
 
@@ -24,7 +24,9 @@ from scipy import ndimage
 
 from .parallel import run_chunks
 
-FILL_VOXELS = 2.0  # gaps narrower than this many voxels (on each side of the middle) are closed
+CLOSE_VOXELS = 2.0  # gaps up to this many voxels (on each side of the middle) are closed
+OPEN_VOXELS = 2.5  # gaps from this many voxels on are left as they are
+FILL_VOXELS = OPEN_VOXELS + 1.0  # the most the skin is made deeper
 
 
 def extra_depth(body, depth, margin: float) -> np.ndarray | None:
@@ -32,7 +34,7 @@ def extra_depth(body, depth, margin: float) -> np.ndarray | None:
     `depth` is a number or a grid of skin depths; `margin` is how far beyond the inner
     face the skin is still evaluated (rounding)."""
     d, grid, h = body.sdf, body.grid, body.grid.h
-    fill = FILL_VOXELS * h
+    fill = OPEN_VOXELS * h
     depth_grid = np.broadcast_to(np.asarray(depth, dtype=np.float32), d.shape)
     near = (d < -(depth_grid - margin - h)) & (d > -(depth_grid + fill + margin + h))
     index = np.nonzero(near)
@@ -64,7 +66,12 @@ def extra_depth(body, depth, margin: float) -> np.ndarray | None:
 
     run_chunks(work, len(d0), 100_000)
     gap = half - depth_grid[index]
-    extra = np.clip(fill - gap, 0.0, fill).astype(np.float32)
+    # Half-width of the gap that is left: overlapping by a voxel (closed) up to CLOSE
+    # voxels, the full gap from OPEN voxels on, steeply in between so that the narrow tip
+    # of a closing gap covers as little of the part as possible.
+    close, open_ = CLOSE_VOXELS * h, OPEN_VOXELS * h
+    left = np.clip(-h + (gap - close) * (open_ + h) / (open_ - close), -h, gap)
+    extra = np.clip(gap - left, 0.0, None).astype(np.float32)
     if not (extra > 0).any():
         return None
     out = np.zeros(d.shape, dtype=np.float32)

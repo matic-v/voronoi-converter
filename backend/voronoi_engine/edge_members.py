@@ -72,6 +72,13 @@ def edge_rounding_range(settings, h: float) -> tuple[float, float]:
     return used, used
 
 
+def blend_used(settings, h: float) -> float:
+    """Blend radius (strut joints, struts into the skin, rib joints): at least two voxels
+    for the same reason as the rounding (edge_rounding_range). 0 stays 0."""
+    blend = settings.blend_radius
+    return max(blend, MIN_ROUNDING_VOXELS * h) if blend > 0 else blend
+
+
 def rounding_near_edges(to_edge: np.ndarray, settings, h: float):
     """Rounding radius next to kept edges: the same as everywhere (edge_rounding_range)."""
     return edge_rounding_range(settings, h)[1]
@@ -94,4 +101,4 @@ def member_depth(settings) -> float:
 
 def member_reach(settings, h: float, rounding: float) -> float:
     """How far from a kept edge a point can be and still be affected (incl. blending)."""
-    return 0.5 * settings.keep_width + member_depth(settings) + 2 * h + rounding + settings.blend_radius
+    return 0.5 * settings.keep_width + member_depth(settings) + 2 * h + rounding + blend_used(settings, h)
