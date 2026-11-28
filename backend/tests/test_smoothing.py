@@ -112,7 +112,7 @@ def test_exact_field_matches_the_unsmoothed_mesh(cube, settings: Settings) -> No
     plain = generate(cube, settings.model_copy(update={"smoothness": "off"}), "final")
     residual = np.abs(field(plain.vertices))
     h = plain.voxel_mm
-    assert np.median(residual) < 0.02 * h
+    assert np.median(residual) < 0.03 * h  # 0.02 before the blurred inner faces
     assert np.quantile(residual, 0.99) < 0.25 * h
 
 

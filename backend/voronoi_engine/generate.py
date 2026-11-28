@@ -257,8 +257,12 @@ def generate(mesh: LoadedMesh, settings: Settings, mode: Mode = "preview",
         z = grid.origin[2] + np.arange(grid.shape[2]) * h
         base = (z - (lo[2] + settings.solid_base_thickness)).astype(np.float32)
         solid = np.minimum(solid, base.reshape(1, 1, -1))
-    # Final: close gaps in the material narrower than the grid can draw (gap_fill).
-    gaps = gap_fill.narrow_gaps(solid, d < 0) if mode == "final" else None
+    # Final: close gaps in the material narrower than the grid can draw (gap_fill), in
+    # the skin layer only: inside, between struts, a filler would add overhangs.
+    gaps = None
+    if mode == "final" and surface != "none":
+        skin_layer = nominal * thickest + FILL_VOXELS * h + rounding + 2 * h
+        gaps = gap_fill.narrow_gaps(solid, (d < 0) & (d > -skin_layer))
     solid = gap_fill.apply(solid, gaps, h)
     solid = np.maximum(solid, d)  # never outside the original envelope
 
