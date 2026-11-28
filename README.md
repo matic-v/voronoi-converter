@@ -106,6 +106,8 @@ Options: `--port 8080`, `--no-browser`, `--test` (run the test suite instead of 
   skins of the two sides would leave a gap in the middle too narrow for the voxel grid (it comes
   out as a torn, ragged rim). Gaps up to 2 voxels on each side of the middle are closed (the
   material there is solid through), and the skin opens again over half a voxel more.
+- **Narrow gaps** (automatic, final only): gaps in the material narrower than about two voxels
+  (for example between an edge strip and the next rib) are filled, for the same reason.
 - **Keep edges (drawn by struts):** after loading, the edges of the model are drawn in blue:
   sharp edges (faces meeting at more than 30°) as single lines, and curved edges (fillets, rounds
   and small holes up to 8 mm radius) as bands of lines along them. Click an edge to keep it (it
