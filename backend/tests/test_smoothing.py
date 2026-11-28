@@ -258,15 +258,28 @@ def test_smoothing_without_edge_rounding_makes_no_spikes(sphere) -> None:
     settings = Settings(surface_style="rib_lattice", interior_style="hollow", edge_rounding=0.0,
                         smoothness="smooth", pointed_holes=False, cleanup="off")
     result = generate(sphere, settings, "final")
-    assert result.valid and spike_count(result) <= 5  # was ~200 before the spike guard
+    # was ~200 before the spike guard; 5 with the blend radius as set, 9 with 2 voxels
+    assert result.valid and spike_count(result) <= 10
 
 
 def test_edge_rounding_only_removes_material_from_an_open_skin(cube) -> None:
     from voronoi_engine.meshing import signed_volume
     base = Settings(surface_style="rib_lattice", interior_style="hollow")
-    volumes = [signed_volume(r.vertices, r.faces) for r in
-               (generate(cube, base.model_copy(update={"edge_rounding": v}), "final") for v in (0.0, 0.5, 1.0))]
-    assert volumes[0] > volumes[1] > volumes[2] > 0.8 * volumes[0]
+    results = [generate(cube, base.model_copy(update={"edge_rounding": v}), "final")
+               for v in (0.0, 1.25, 2.0)]  # above the 2-voxel minimum (0.5 mm voxels here)
+    assert results[0].voxel_mm <= 0.5
+    volumes = [signed_volume(r.vertices, r.faces) for r in results]
+    assert volumes[0] > volumes[1] > volumes[2] > 0.3 * volumes[0]  # thin default ribs
+
+
+def test_rounding_and_blend_are_at_least_two_voxels() -> None:
+    from voronoi_engine.edge_members import blend_used, edge_rounding_range
+
+    s = Settings(edge_rounding=0.5, blend_radius=1.0)
+    assert edge_rounding_range(s, 0.8) == (1.6, 1.6) and blend_used(s, 0.8) == 1.6
+    assert edge_rounding_range(s, 0.2) == (0.5, 0.5) and blend_used(s, 0.2) == 1.0
+    sharp = Settings(edge_rounding=0.0, blend_radius=0.0)
+    assert edge_rounding_range(sharp, 0.8) == (0.0, 0.0) and blend_used(sharp, 0.8) == 0.0
 
 
 def test_edge_rounding_keeps_the_outer_dimensions(cube) -> None:
